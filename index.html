@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <title>Domain Security Checker</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        /* Small overrides for MX results layout and copy buttons */
+        .mx-records { display:block; width:100%; max-width:760px; box-sizing:border-box; }
+        .mx-records .record-line { display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.04); }
+        .mx-copy-btn { margin-left:12px; padding:4px 8px; border-radius:4px; background:#2b6cb0; color:#fff; border:none; cursor:pointer; }
+        .mx-copy-btn.copied { background:#16a34a; }
+        .whois-btn { margin-left:8px; padding:4px 8px; border-radius:4px; background:#555; color:#fff; border:none; cursor:pointer; }
+        .whois-btn.loading { opacity:0.7 }
+
+        /* WHOIS popout */
+        .whois-popout { position:fixed; z-index:1200; min-width:260px; max-width:460px; background:#fff; color:#111; border-radius:8px; box-shadow:0 8px 30px rgba(2,6,23,0.4); padding:12px; font-size:13px; }
+        .whois-popout h4 { margin:0 0 8px 0; font-size:14px }
+        .whois-popout .whois-row { margin:6px 0; color:#333 }
+        .whois-popout .whois-attr { font-weight:600; margin-right:6px }
+        .whois-popout .attribution { margin-top:8px;font-size:12px;color:#555 }
+        .whois-popout .attribution a { color:#1a73e8 }
+    /* whois-block styling moved to styles.css */
+    </style>
+</head>
+<body class="dark">
+    <div class="container">
+        <!-- Header with theme toggle -->
+        <header class="header">
+            <a class="header-toggle-btn" href="https://checkjeheader.nl/" target="_blank" rel="noopener noreferrer">📧 Check Header</a>
+            <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark/light mode">☀️</button>
+        </header>
+
+        <!-- Main content - Google-like layout -->
+        <main class="main-content">
+            <!-- Logo/Title -->
+            <div class="logo-section">
+                <h1>Domain Security Checker</h1>
+                <p>Check SPF, DMARC, DKIM and MX records</p>
+            </div>
+
+            <!-- Search section -->
+            <div class="search-section">
+                <div class="search-container">
+                    <div class="search-box">
+                        <input type="text" id="domain" placeholder="Enter your domain (e.g., checkjedns.nl)" autocomplete="off">
+                        <button id="checkButton" class="search-button" aria-label="Check domain">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M21 21L16.514 16.506L21 21ZM19 10.5C19 15.194 15.194 19 10.5 19C5.806 19 2 15.194 2 10.5C2 5.806 5.806 2 10.5 2C15.194 2 19 5.806 19 10.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick action buttons -->
+            <div class="quick-actions">
+                <div class="action-button">
+                    <div class="action-icon">🇳🇱</div>
+                    <span>Dutch Records</span>
+                </div>
+                <div class="action-button">
+                    <div class="action-icon">🔍</div>
+                    <span>200+ Checks</span>
+                </div>
+                <div class="action-button">
+                    <div class="action-icon">⚡</div>
+                    <span>Fast Results</span>
+                </div>
+            </div>
+
+        </main>
+        
+        <!-- Copyright -->
+        <footer class="copyright">
+            <a class="footer-github" href="https://github.com/notfocust" target="_blank" rel="noopener noreferrer" aria-label="View GitHub repositories">
+                <!-- GitHub Mark (filled) SVG -->
+                <svg height="20" viewBox="0 0 16 16" width="20" aria-hidden="true" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38C13.71 14.53 16 11.54 16 8c0-4.42-3.58-8-8-8z"></path>
+                </svg>
+            </a>
+        </footer>
+    </div>
+    
+    <!-- Results Modal -->
+    <div id="resultsModal" class="modal" aria-hidden="true" role="dialog" aria-modal="true">
+        <div class="modal-content">
+            <button class="modal-close" id="modalClose" aria-label="Close">✕</button>
+            <div class="modal-header">
+                <h2 id="modalTitle">Results</h2>
+                <div class="modal-controls">
+                    <input type="text" id="modalDomain" placeholder="Enter a domain" />
+                    <button id="modalCheck" class="btn btn-primary">Check</button>
+                    <button id="modalRetry" class="btn" aria-label="Retry check" title="Retry">
+                        <!-- Refresh/Retry icon -->
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M21 10a1 1 0 0 0-1 1 7 7 0 1 1-2.05-4.95l1.42-1.42A9 9 0 1 0 23 11a1 1 0 0 0-1-1z"></path>
+                            <path d="M12 6v6l4-2"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div id="modalResults"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
