@@ -166,11 +166,148 @@ class EmailSecurityChecker {
         if (themeToggle) {
             themeToggle.addEventListener('click', () => {
                 const nowDark = !document.body.classList.contains('dark');
+                
+                // Show warning for IT Nerds when switching to light mode
+                if (!nowDark) {
+                    this.showLightModeWarning(themeToggle, nowDark);
+                    return; // Don't apply theme change yet
+                }
+                
+                // For dark mode, apply immediately
                 document.body.classList.toggle('dark', nowDark);
                 localStorage.setItem('theme', nowDark ? 'dark' : 'light');
                 themeToggle.textContent = nowDark ? '☀️' : '🌙';
             });
         }
+    }
+
+    showLightModeWarning(themeToggle, nowDark) {
+        // Create a small popup next to the sun icon
+        const popup = document.createElement('div');
+        popup.style.cssText = `
+            position: fixed;
+            top: 70px;
+            right: 20px;
+            background: #303134;
+            border: 1px solid #5f6368;
+            border-radius: 8px;
+            padding: 16px;
+            z-index: 9999;
+            min-width: 280px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        `;
+        
+        const message = document.createElement('div');
+        message.style.cssText = `
+            font-size: 14px;
+            color: #e8eaed;
+            margin-bottom: 12px;
+            font-weight: 500;
+        `;
+        message.textContent = '⚠️ Are you an IT Nerd?';
+        
+        const description = document.createElement('div');
+        description.style.cssText = `
+            font-size: 13px;
+            color: #9aa0a6;
+            margin-bottom: 12px;
+            line-height: 1.4;
+        `;
+        description.textContent = 'Click below and save yourself from a flashbang!';
+        
+        const timerContainer = document.createElement('div');
+        timerContainer.style.cssText = `
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        `;
+        
+        const timer = document.createElement('div');
+        timer.style.cssText = `
+            flex: 1;
+            background: #3c4043;
+            color: #8ab4f8;
+            padding: 8px;
+            border-radius: 4px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 16px;
+            border: 1px solid #5f6368;
+        `;
+        timer.textContent = '3';
+        timerContainer.appendChild(timer);
+        
+        const clickButton = document.createElement('button');
+        clickButton.style.cssText = `
+            flex: 1;
+            background: #1a73e8;
+            color: white;
+            border: none;
+            padding: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 13px;
+            transition: background 0.2s;
+        `;
+        clickButton.textContent = 'Click Me!';
+        clickButton.onmouseover = () => clickButton.style.background = '#1557b0';
+        clickButton.onmouseout = () => clickButton.style.background = '#1a73e8';
+        
+        let clicked = false;
+        let finished = false;
+        
+        const applyLightMode = () => {
+            if (!finished) {
+                finished = true;
+                document.body.classList.toggle('dark', nowDark);
+                localStorage.setItem('theme', nowDark ? 'dark' : 'light');
+                themeToggle.textContent = nowDark ? '☀️' : '🌙';
+            }
+        };
+        
+        clickButton.addEventListener('click', () => {
+            if (clicked) return;
+            clicked = true;
+            message.textContent = '✅ SUCCESS!';
+            description.textContent = 'You saved yourself from a flashbang!';
+            timerContainer.remove();
+            
+            // Remove popup after showing success (stay in dark mode)
+            setTimeout(() => popup.remove(), 2000);
+        });
+        
+        timerContainer.appendChild(clickButton);
+        
+        popup.appendChild(message);
+        popup.appendChild(description);
+        popup.appendChild(timerContainer);
+        
+        document.body.appendChild(popup);
+        
+        // Countdown timer
+        let timeLeft = 3;
+        const timerInterval = setInterval(() => {
+            timeLeft--;
+            if (!clicked && timeLeft > 0) {
+                timer.textContent = timeLeft.toString();
+            }
+            
+            if (timeLeft <= 0) {
+                clearInterval(timerInterval);
+                if (!clicked) {
+                    // If not clicked, show flashbang
+                    popup.remove();
+                    this.showFlashbang();
+                    applyLightMode(); // Apply light mode after flashbang
+                }
+            }
+        }, 1000);
+    }
+
+    showFlashbang() {
+        // Silent flashbang - do nothing
     }
 
     toggleHeaderInput() {
