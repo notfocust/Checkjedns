@@ -1,3 +1,1128 @@
+// ==================== TYPEWRITER ANIMATION ====================
+// Typewriter animation removed - using static subtitle instead
+
+
+// ==================== HEADER CHECKER INITIALIZATION ====================
+function initHeaderChecker() {
+    const inputEl = document.getElementById('header-input');
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const resultsEl = document.getElementById('results');
+    const hopsTableBody = document.querySelector('#hops-table tbody');
+    const fieldsTableBody = document.querySelector('#fields-table tbody');
+    const summaryEl = document.getElementById('summary');
+    const modal = document.getElementById('results-modal');
+    const dropSquare = document.getElementById('drop-square');
+    const previewEmailBtn = document.getElementById('preview-email-btn');
+
+    // Default theme: dark for body class sync
+    document.body.classList.add('dark');
+    
+    // Store current email data for preview
+    let currentEmailData = null;
+
+    function parseRawHeaders(raw) {
+        // Unfold headers: join wrapped lines (RFC 5322 folding)
+        const unfolded = raw.replace(/\r?\n[\t ]+/g, ' ');
+        const lines = unfolded.split(/\r?\n/);
+        const headers = [];
+        let current = null;
+        for (const line of lines) {
+            if (!line.trim()) continue;
+            const sep = line.indexOf(':');
+            if (sep > -1) {
+                const name = line.slice(0, sep).trim();
+                const value = line.slice(sep + 1).trim();
+                headers.push({ name, value });
+                current = headers[headers.length - 1];
+            } else if (current) {
+                current.value += ' ' + line.trim();
+            }
+        }
+        return headers;
+    }
+
+    function extractReceived(headers) {
+        const received = headers.filter(h => /^(received)$/i.test(h.name));
+        // RFC order: top-most is last hop; we want chronological
+        return received.reverse();
+    }
+
+    function parseReceivedLine(value) {
+        // Try capture from, by, with, id, for, and the trailing date
+        // The date is usually after ';'
+        let datePart = null;
+        let main = value;
+        const semiIdx = value.lastIndexOf(';');
+        if (semiIdx !== -1) {
+            datePart = value.slice(semiIdx + 1).trim();
+            main = value.slice(0, semiIdx).trim();
+        }
+        const fromMatch = main.match(/\bfrom\s+([^;]+?)\s+(?=by\b|with\b|id\b|for\b|$)/i);
+        const byMatch = main.match(/\bby\s+([^;]+?)\s+(?=with\b|id\b|for\b|$)/i);
+        const withMatch = main.match(/\bwith\s+([^;]+?)\s+(?=id\b|for\b|$)/i);
+        const idMatch = main.match(/\bid\s+([^;]+?)\s+(?=for\b|$)/i);
+        const forMatch = main.match(/\bfor\s+([^;]+?)\s*$/i);
+        return {
+            from: fromMatch ? fromMatch[1].trim() : null,
+            by: byMatch ? byMatch[1].trim() : null,
+            with: withMatch ? withMatch[1].trim() : null,
+            id: idMatch ? idMatch[1].trim() : null,
+            for: forMatch ? forMatch[1].trim() : null,
+            dateRaw: datePart,
+        };
+    }
+
+    function parseDateToUtc(dateStr) {
+        if (!dateStr) return { date: null, iso: null };
+        // Many headers use formats like: Sun, 3 Jul 2011 08:21:06 -0700 (PDT)
+        // Remove comments in parentheses to avoid parser confusion
+        const cleaned = dateStr.replace(/\([^)]*\)/g, '').trim();
+        const d = new Date(cleaned);
+        if (isNaN(d.getTime())) return { date: null, iso: null };
+        return { date: d, iso: d.toISOString() };
+    }
+
+    function computeHopDeltas(hops) {
+        let prevTime = null;
+        for (const hop of hops) {
+            if (hop.time && prevTime) {
+                hop.deltaMs = hop.time.getTime() - prevTime.getTime();
+            } else {
+                hop.deltaMs = null;
+            }
+            if (hop.time) prevTime = hop.time;
+        }
+        return hops;
+    }
+
+    function humanDelta(ms) {
+        if (ms === null || ms === undefined) return '—';
+        const sign = ms < 0 ? '-' : '';
+        const abs = Math.abs(ms);
+        const s = Math.floor(abs / 1000) % 60;
+        const m = Math.floor(abs / (60 * 1000)) % 60;
+        const h = Math.floor(abs / (60 * 60 * 1000));
+        const parts = [];
+        if (h) parts.push(`${h}u`);
+        if (m || h) parts.push(`${m}m`);
+        parts.push(`${s}s`);
+        return sign + parts.join(' ');
+    }
+
+    function analyze(raw) {
+        const headers = parseRawHeaders(raw);
+        const receivedLines = extractReceived(headers).map(h => h.value);
+        const hopsParsed = receivedLines.map(parseReceivedLine).map((r, idx) => {
+            const { date, iso } = parseDateToUtc(r.dateRaw);
+            return {
+                index: idx + 1,
+                from: r.from,
+                by: r.by,
+                with: r.with,
+                id: r.id,
+                for: r.for,
+                dateRaw: r.dateRaw || '—',
+                iso: iso,
+                time: date,
+            };
+        });
+        computeHopDeltas(hopsParsed);
+
+        // Compute total span and largest delta
+        const times = hopsParsed.map(h => h.time).filter(Boolean).map(d => d.getTime());
+        const totalSpan = times.length ? Math.max(...times) - Math.min(...times) : null;
+        let maxDelta = -Infinity; let maxIdx = -1;
+        for (let i = 0; i < hopsParsed.length; i++) {
+            const d = hopsParsed[i].deltaMs;
+            if (d !== null && d > maxDelta) { maxDelta = d; maxIdx = i; }
+        }
+
+        return { headers, hops: hopsParsed, totalSpan, maxIdx, maxDelta };
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    }
+
+    function renderAnalysis(model) {
+        resultsEl.hidden = false;
+        // Summary (English)
+        const total = model.totalSpan != null ? humanDelta(model.totalSpan) : '—';
+        const maxLabel = model.maxDelta != null && model.maxDelta !== -Infinity ? humanDelta(model.maxDelta) : '—';
+        summaryEl.innerHTML = `Total transit time: <strong>${total}</strong> · Largest delay: <strong>${maxLabel}</strong>${model.maxIdx>=0 && model.hops[model.maxIdx]?.by ? ` at <code>${escapeHtml(model.hops[model.maxIdx].by)}</code>` : ''}`;
+
+        // Hops table
+        hopsTableBody.innerHTML = '';
+        model.hops.forEach((h, i) => {
+            const tr = document.createElement('tr');
+            if (i === model.maxIdx) tr.classList.add('highlight');
+            const deltaClass = h.deltaMs != null && h.deltaMs > 60_000 ? 'delta-warn' : 'delta-ok';
+            
+            // Make IPs and domains clickable in from/by fields
+            let fromHtml = escapeHtml(h.from || '—');
+            let byHtml = escapeHtml(h.by || '—');
+            
+            // Extract and make IPs clickable (only public IPs)
+            fromHtml = fromHtml.replace(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/g, (match) => {
+                if (isPublicIP(match)) {
+                    return `<span class="ip-address" data-ip="${match}">${match}</span>`;
+                }
+                return match;
+            });
+            byHtml = byHtml.replace(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/g, (match) => {
+                if (isPublicIP(match)) {
+                    return `<span class="ip-address" data-ip="${match}">${match}</span>`;
+                }
+                return match;
+            });
+            
+            // Extract and make domains clickable (only main domain, not subdomains)
+            fromHtml = fromHtml.replace(/\b([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,})\b/g, (match) => {
+                // Extract the main domain (last two parts)
+                const parts = match.split('.');
+                if (parts.length >= 2) {
+                    const mainDomain = parts.slice(-2).join('.');
+                    return match.replace(mainDomain, `<span class="domain-address" data-domain="${mainDomain}">${mainDomain}</span>`);
+                }
+                return match;
+            });
+            byHtml = byHtml.replace(/\b([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,})\b/g, (match) => {
+                // Extract the main domain (last two parts)
+                const parts = match.split('.');
+                if (parts.length >= 2) {
+                    const mainDomain = parts.slice(-2).join('.');
+                    return match.replace(mainDomain, `<span class="domain-address" data-domain="${mainDomain}">${mainDomain}</span>`);
+                }
+                return match;
+            });
+            
+            tr.innerHTML = `
+                <td>${h.index}</td>
+                <td>${fromHtml}</td>
+                <td>${byHtml}</td>
+                <td>${escapeHtml(h.dateRaw)}${h.iso ? `<br><small>${h.iso}</small>` : ''}</td>
+                <td class="${h.deltaMs!=null ? deltaClass : ''}">${h.deltaMs!=null ? humanDelta(h.deltaMs) : '—'}</td>
+            `;
+            hopsTableBody.appendChild(tr);
+        });
+
+        // Fields table: show a subset of key headers with help tooltips
+        const wanted = ['From','To','Subject','Date','Message-Id','Return-Path','Reply-To','Delivered-To','Authentication-Results','Received-SPF'];
+        const fieldExplanations = {
+            'Date': 'When the email was sent (original timezone)',
+            'Message-Id': 'Unique identifier for this email message',
+            'Return-Path': 'Bounce address for delivery failures',
+            'Reply-To': 'Address replies should be sent to',
+            'Delivered-To': 'Final recipient address',
+            'Authentication-Results': 'SPF, DKIM, and DMARC verification results',
+            'Received-SPF': 'SPF authentication status'
+        };
+        const map = new Map();
+        for (const h of model.headers) {
+            const key = h.name.trim();
+            if (wanted.some(w => w.toLowerCase() === key.toLowerCase())) {
+                if (!map.has(key)) map.set(key, []);
+                map.get(key).push(h.value);
+            }
+        }
+        
+        // Update header title
+        const titleEl = document.getElementById('header-fields-title');
+        if (titleEl) {
+            titleEl.textContent = 'Header Fields';
+        }
+        
+        fieldsTableBody.innerHTML = '';
+        for (const [k, values] of map) {
+            const tr = document.createElement('tr');
+            const explanation = fieldExplanations[k];
+            const helpIcon = explanation ? ` <span class="help-icon" title="${escapeHtml(explanation)}">?</span>` : '';
+            
+            // Color code pass/fail in values and make IPs/domains clickable
+            const coloredValues = values.map(v => {
+                let colored = escapeHtml(v);
+                // Highlight "pass" in green
+                colored = colored.replace(/\b(pass)\b/gi, '<span style="color: var(--ok); font-weight: 600;">$1</span>');
+                // Highlight "fail" in red
+                colored = colored.replace(/\b(fail|failed)\b/gi, '<span style="color: var(--danger); font-weight: 600;">$1</span>');
+                // Make IP addresses clickable (only public IPs)
+                colored = colored.replace(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/g, (match) => {
+                    if (isPublicIP(match)) {
+                        return `<span class="ip-address" data-ip="${match}">${match}</span>`;
+                    }
+                    return match;
+                });
+                // Make domains clickable (only main domain)
+                colored = colored.replace(/\b([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,})\b/g, (match) => {
+                    const parts = match.split('.');
+                    if (parts.length >= 2) {
+                        const mainDomain = parts.slice(-2).join('.');
+                        return match.replace(mainDomain, `<span class="domain-address" data-domain="${mainDomain}">${mainDomain}</span>`);
+                    }
+                    return match;
+                });
+                return `<div>${colored}</div>`;
+            }).join('');
+            
+            tr.innerHTML = `<td>${escapeHtml(k)}${helpIcon}</td><td>${coloredValues}</td>`;
+            fieldsTableBody.appendChild(tr);
+        }
+
+        // Authentication-Results focus (SPF/DKIM/DMARC)
+        const authStatusEl = document.getElementById('auth-status');
+        const authBadgesEl = document.getElementById('auth-badges');
+        const authDetailsEl = document.getElementById('auth-details');
+        const authHeaders = model.headers.filter(h => /^authentication-results$/i.test(h.name));
+        if (authHeaders.length) {
+            authStatusEl.hidden = false;
+            const parsed = parseAuthResults(authHeaders.map(h => h.value));
+            authBadgesEl.innerHTML = '';
+            const addBadge = (label, status) => {
+                const span = document.createElement('span');
+                span.className = `badge ${status}`;
+                span.textContent = `${label}: ${status.toUpperCase()}`;
+                
+                // Add tooltip based on label
+                let tooltip = '';
+                if (label === 'SPF') {
+                    tooltip = 'SPF (Sender Policy Framework) verifies that the sending server is authorized to send emails for this domain';
+                } else if (label === 'DKIM') {
+                    tooltip = 'DKIM (DomainKeys Identified Mail) verifies that the email was not tampered with during transit';
+                } else if (label === 'DMARC') {
+                    tooltip = 'DMARC (Domain-based Message Authentication) provides policy for handling SPF and DKIM failures';
+                }
+                
+                if (tooltip) {
+                    span.setAttribute('title', tooltip);
+                }
+                
+                authBadgesEl.appendChild(span);
+            };
+            addBadge('SPF', parsed.spf.status);
+            addBadge('DKIM', parsed.dkim.overall);
+            addBadge('DMARC', parsed.dmarc.status);
+
+            authDetailsEl.innerHTML = '';
+        } else {
+            authStatusEl.hidden = true;
+        }
+    }
+
+    function parseAuthResults(values) {
+        // Concatenate all auth-results values
+        const text = values.join(' \n ');
+        // SPF: spf=pass/fail/neutral
+        const spfMatch = text.match(/spf=(pass|fail|neutral|softfail|none)/i);
+        const spfStatus = spfMatch ? normalizeAuth(spfMatch[1]) : 'neutral';
+        // DMARC: dmarc=pass/fail
+        const dmarcMatch = text.match(/dmarc=(pass|fail|bestguesspass|none)/i);
+        const dmarcStatus = dmarcMatch ? normalizeAuth(dmarcMatch[1]) : 'neutral';
+        // DKIM: one or more dkim=pass/fail with domain
+        const dkimRegex = /dkim=(pass|fail|neutral|none)(?:\s*\(([^)]*)\))?/ig;
+        const signatures = [];
+        let m;
+        while ((m = dkimRegex.exec(text))) {
+            const result = normalizeAuth(m[1]);
+            const ctx = m[2] || '';
+            const domainMatch = ctx.match(/header\.d=([^;\s)]+)/i);
+            signatures.push({ domain: domainMatch ? domainMatch[1] : null, result });
+        }
+        const overallDkim = signatures.some(s => s.result === 'pass') ? 'pass' : (signatures.some(s => s.result === 'fail') ? 'fail' : 'neutral');
+        return { spf: { status: spfStatus }, dmarc: { status: dmarcStatus }, dkim: { overall: overallDkim, signatures } };
+    }
+
+    function normalizeAuth(s) {
+        s = String(s).toLowerCase();
+        if (s === 'bestguesspass') return 'pass';
+        if (s === 'softfail') return 'fail';
+        return s;
+    }
+
+    function handleAnalyze() {
+        const raw = inputEl.value.trim();
+        if (!raw) { resultsEl.hidden = true; return; }
+        const model = analyze(raw);
+        renderAnalysis(model);
+        openModal();
+    }
+
+    function handleFiles(files) {
+        if (!files || !files.length) return;
+        const file = files[0];
+        const reader = new FileReader();
+        reader.onload = () => {
+            const text = String(reader.result || '');
+            const headerBlock = extractHeadersFromEml(text) || text;
+            inputEl.value = headerBlock;
+            
+            // Store email data for preview
+            currentEmailData = {
+                file: file,
+                text: text,
+                headerBlock: headerBlock
+            };
+            
+            handleAnalyze();
+        };
+        reader.readAsText(file);
+    }
+
+    function extractHeadersFromEml(emlText) {
+        // Headers end at first blank line (CRLF CRLF). Keep folding intact for parseRawHeaders to handle.
+        const idx = emlText.search(/\r?\n\r?\n/);
+        if (idx === -1) return null;
+        return emlText.slice(0, idx).trimEnd();
+    }
+
+    function openModal() {
+        if (!modal) return;
+        modal.classList.add('open');
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+    }
+    function closeModal() {
+        if (!modal) return;
+        modal.classList.remove('open');
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+    }
+
+    function isPublicIP(ip) {
+        const parts = ip.split('.').map(Number);
+        if (parts.length !== 4) return false;
+        
+        // Private IP ranges
+        if (parts[0] === 10) return false; // 10.0.0.0/8
+        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false; // 172.16.0.0/12
+        if (parts[0] === 192 && parts[1] === 168) return false; // 192.168.0.0/16
+        if (parts[0] === 127) return false; // 127.0.0.0/8 (localhost)
+        if (parts[0] === 169 && parts[1] === 254) return false; // 169.254.0.0/16 (link-local)
+        if (parts[0] === 0) return false; // 0.0.0.0/8
+        if (parts[0] >= 224) return false; // 224.0.0.0/4 (multicast/reserved)
+        
+        return true;
+    }
+
+    // Events
+    // Removed Analyze/Clear buttons; analyze automatically on file/paste
+    fileInput.addEventListener('change', e => handleFiles(e.target.files));
+    
+    // Input method toggle
+    const methodToggles = document.querySelectorAll('.method-toggle');
+    const methodSections = document.querySelectorAll('.method-section');
+    const emlToggle = document.getElementById('eml-toggle');
+    
+    methodToggles.forEach(toggle => {
+        toggle.addEventListener('click', () => {
+            const method = toggle.getAttribute('data-method');
+            
+            // If clicking Upload .eml File, open file picker instead of just toggling
+            if (method === 'eml' && toggle === emlToggle) {
+                fileInput.click();
+                return;
+            }
+            
+            // Update active toggle
+            methodToggles.forEach(t => t.classList.remove('active'));
+            toggle.classList.add('active');
+            
+            // Show/hide method sections
+            methodSections.forEach(section => {
+                const sectionMethod = section.getAttribute('data-method');
+                if (sectionMethod === method) {
+                    section.style.display = sectionMethod === 'eml' ? 'flex' : 'block';
+                } else {
+                    section.style.display = 'none';
+                }
+            });
+        });
+    });
+    
+    // Analyze when user pastes or types in the textarea
+    inputEl.addEventListener('input', () => {
+        if (inputEl.value.trim()) {
+            currentEmailData = {
+                headerBlock: inputEl.value.trim()
+            };
+            handleAnalyze();
+        }
+    });
+
+    // Drag and drop support on the entire header content area
+    const headerContent = document.getElementById('header-tab');
+    headerContent?.addEventListener('dragover', e => { 
+        e.preventDefault(); 
+        e.dataTransfer.dropEffect = 'copy';
+        headerContent.classList.add('dragover');
+    });
+    headerContent?.addEventListener('dragleave', () => { 
+        headerContent.classList.remove('dragover');
+    });
+    headerContent?.addEventListener('drop', e => { 
+        e.preventDefault(); 
+        headerContent.classList.remove('dragover');
+        handleFiles(e.dataTransfer.files);
+    });
+
+    // Modal close handlers
+    modal?.addEventListener('click', e => { const t = e.target; if (t && t.getAttribute && t.getAttribute('data-close') === 'modal') closeModal(); });
+    const closeBtn = document.querySelector('.modal-close');
+    closeBtn?.addEventListener('click', closeModal);
+    
+    // Preview email button
+    previewEmailBtn?.addEventListener('click', () => {
+        if (currentEmailData) {
+            showEmailPreview(currentEmailData);
+        }
+    });
+
+    // Check links button
+    const checkLinksBtn = document.getElementById('check-links-btn');
+    checkLinksBtn?.addEventListener('click', () => {
+        if (currentEmailData) {
+            showLinkChecker(currentEmailData);
+        }
+    });
+
+    // Theme switch is handled by EmailSecurityChecker
+
+    // IP address and domain click handler
+    document.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('ip-address')) {
+            const ip = e.target.getAttribute('data-ip');
+            showIpInfo(ip);
+        } else if (e.target.classList.contains('domain-address')) {
+            const domain = e.target.getAttribute('data-domain');
+            showDomainInfo(domain);
+        }
+    });
+
+    // IP info popup functions
+    async function showIpInfo(ip) {
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'ip-popup-overlay';
+        overlay.innerHTML = `
+            <div class="ip-popup">
+                <button class="close-btn" onclick="this.closest('.ip-popup-overlay').remove()">×</button>
+                <h3>IP Information: ${ip}</h3>
+                <div class="loading">Loading...</div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        try {
+            const response = await fetch(`https://api.ipapi.is?q=${ip}`);
+            const data = await response.json();
+            
+            const popup = overlay.querySelector('.ip-popup');
+            popup.innerHTML = `
+                <button class="close-btn" onclick="this.closest('.ip-popup-overlay').remove()">×</button>
+                <h3>IP Information: ${ip}</h3>
+                <div class="info-item">
+                    <span class="info-label">IP:</span>
+                    <span class="info-value">${data.ip || ip}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Country:</span>
+                    <span class="info-value">${data.country || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Region:</span>
+                    <span class="info-value">${data.region || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">City:</span>
+                    <span class="info-value">${data.city || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">ISP:</span>
+                    <span class="info-value">${data.isp || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Organization:</span>
+                    <span class="info-value">${data.company?.name || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">ASN:</span>
+                    <span class="info-value">${data.asn?.asn || 'Unknown'} - ${data.asn?.name || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Type:</span>
+                    <span class="info-value">${data.asn?.type || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Hosting:</span>
+                    <span class="info-value" style="color: ${data.hosting ? '#ff4444' : '#44ff44'}">${data.hosting ? 'Yes' : 'No'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">VPN:</span>
+                    <span class="info-value" style="color: ${data.vpn ? '#ff4444' : '#44ff44'}">${data.vpn ? 'Yes' : 'No'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Proxy:</span>
+                    <span class="info-value" style="color: ${data.proxy ? '#ff4444' : '#44ff44'}">${data.proxy ? 'Yes' : 'No'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Tor:</span>
+                    <span class="info-value" style="color: ${data.tor ? '#ff4444' : '#44ff44'}">${data.tor ? 'Yes' : 'No'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Abuser:</span>
+                    <span class="info-value" style="color: ${data.abuser ? '#ff4444' : '#44ff44'}">${data.abuser ? 'Yes' : 'No'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Latitude:</span>
+                    <span class="info-value">${data.latitude || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Longitude:</span>
+                    <span class="info-value">${data.longitude || 'Unknown'}</span>
+                </div>
+            `;
+        } catch (error) {
+            const popup = overlay.querySelector('.ip-popup');
+            popup.innerHTML = `
+                <button class="close-btn" onclick="this.closest('.ip-popup-overlay').remove()">×</button>
+                <h3>IP Information: ${ip}</h3>
+                <div class="loading">Error loading IP information</div>
+            `;
+        }
+
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.remove();
+            }
+        });
+    }
+
+    // Domain info popup functions
+    async function showDomainInfo(domain) {
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'ip-popup-overlay';
+        overlay.innerHTML = `
+            <div class="ip-popup">
+                <button class="close-btn" onclick="this.closest('.ip-popup-overlay').remove()">×</button>
+                <h3>Phishing Check: ${domain}</h3>
+                <div class="loading">Analyzing domain...</div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        try {
+            // Analyze domain for phishing indicators
+            const analysis = analyzeDomainForPhishing(domain);
+            
+            const popup = overlay.querySelector('.ip-popup');
+            popup.innerHTML = `
+                <button class="close-btn" onclick="this.closest('.ip-popup-overlay').remove()">×</button>
+                <h3>Phishing Check: ${domain}</h3>
+                <div class="info-item">
+                    <span class="info-label">Domain:</span>
+                    <span class="info-value">${domain}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Risk Level:</span>
+                    <span class="info-value" style="color: ${analysis.riskLevel === 'High' ? '#ff4444' : analysis.riskLevel === 'Medium' ? '#ffaa00' : '#44ff44'}">${analysis.riskLevel}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Score:</span>
+                    <span class="info-value">${analysis.score}/10</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Analysis:</span>
+                    <span class="info-value">${analysis.analysis}</span>
+                </div>
+                ${analysis.warnings.length > 0 ? `
+                <div class="info-item">
+                    <span class="info-label">Warnings:</span>
+                    <span class="info-value">${analysis.warnings.join(', ')}</span>
+                </div>
+                ` : ''}
+            `;
+        } catch (error) {
+            const popup = overlay.querySelector('.ip-popup');
+            popup.innerHTML = `
+                <button class="close-btn" onclick="this.closest('.ip-popup-overlay').remove()">×</button>
+                <h3>Phishing Check: ${domain}</h3>
+                <div class="info-item">
+                    <span class="info-label">Error:</span>
+                    <span class="info-value">Unable to analyze domain</span>
+                </div>
+            `;
+        }
+
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.remove();
+            }
+        });
+    }
+
+    function analyzeDomainForPhishing(domain) {
+        const warnings = [];
+        let score = 0;
+        
+        // Check for suspicious TLDs
+        const suspiciousTlds = ['.tk', '.ml', '.ga', '.cf', '.pw', '.top', '.click', '.download'];
+        const tld = domain.substring(domain.lastIndexOf('.'));
+        if (suspiciousTlds.includes(tld.toLowerCase())) {
+            warnings.push('Suspicious TLD');
+            score += 3;
+        }
+        
+        // Check for typosquatting patterns
+        const commonDomains = ['google', 'microsoft', 'apple', 'amazon', 'facebook', 'twitter', 'instagram', 'linkedin', 'paypal', 'ebay', 'netflix', 'spotify', 'youtube', 'github', 'dropbox', 'adobe', 'salesforce', 'slack', 'zoom', 'teams'];
+        const domainName = domain.split('.')[0].toLowerCase();
+        
+        for (const common of commonDomains) {
+            if (domainName.includes(common) && domainName !== common) {
+                warnings.push('Possible typosquatting');
+                score += 4;
+                break;
+            }
+        }
+        
+        // Check for suspicious subdomains
+        const suspiciousSubdomains = ['secure', 'login', 'account', 'verify', 'update', 'confirm', 'support', 'help', 'admin', 'portal'];
+        const subdomains = domain.split('.').slice(0, -2);
+        for (const subdomain of subdomains) {
+            if (suspiciousSubdomains.includes(subdomain.toLowerCase())) {
+                warnings.push('Suspicious subdomain');
+                score += 2;
+            }
+        }
+        
+        // Check domain length (very long domains are suspicious)
+        if (domain.length > 30) {
+            warnings.push('Unusually long domain');
+            score += 1;
+        }
+        
+        // Check for numbers in domain (suspicious)
+        if (/\d/.test(domainName)) {
+            warnings.push('Contains numbers');
+            score += 1;
+        }
+        
+        // Check for hyphens (suspicious)
+        if (domain.includes('-')) {
+            warnings.push('Contains hyphens');
+            score += 1;
+        }
+        
+        // Check for mixed case (suspicious)
+        if (domain !== domain.toLowerCase() && domain !== domain.toUpperCase()) {
+            warnings.push('Mixed case');
+            score += 1;
+        }
+        
+        // Determine risk level
+        let riskLevel = 'Low';
+        if (score >= 7) {
+            riskLevel = 'High';
+        } else if (score >= 4) {
+            riskLevel = 'Medium';
+        }
+        
+        // Generate analysis text
+        let analysis = 'Domain appears legitimate';
+        if (score >= 7) {
+            analysis = 'High risk of phishing - avoid this domain';
+        } else if (score >= 4) {
+            analysis = 'Medium risk - exercise caution';
+        } else if (score > 0) {
+            analysis = 'Low risk - minor concerns detected';
+        }
+        
+        return {
+            domain,
+            score: Math.min(score, 10),
+            riskLevel,
+            analysis,
+            warnings
+        };
+    }
+
+    // Link checker functions
+    function showLinkChecker(emailData) {
+        const urls = extractUrlsFromEmail(emailData.text);
+        
+        if (urls.length === 0) {
+            alert('No URLs found in this email');
+            return;
+        }
+
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'ip-popup-overlay';
+        overlay.innerHTML = `
+            <div class="ip-popup" style="max-width: 95vw; max-height: 95vh; width: 1200px;">
+                <button class="close-btn">×</button>
+                <h3>Link Checker: ${urls.length} URLs found</h3>
+                <div class="link-checker">
+                    <div class="urls-list">
+                        ${urls.map((url, index) => `
+                            <div class="url-item" data-url="${url}">
+                                <div class="url-header">
+                                    <span class="url-text">${url}</span>
+                                    <button class="check-btn" data-url="${url}" data-index="${index}">Check</button>
+                                </div>
+                                <div class="url-preview" id="preview-${index}"></div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        // Add event listeners
+        const closeBtn = overlay.querySelector('.close-btn');
+        closeBtn.addEventListener('click', () => overlay.remove());
+
+        const checkBtns = overlay.querySelectorAll('.check-btn');
+        checkBtns.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const url = e.target.getAttribute('data-url');
+                const index = parseInt(e.target.getAttribute('data-index'));
+                checkSingleUrl(url, index);
+            });
+        });
+
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.remove();
+            }
+        });
+    }
+
+    function extractUrlsFromEmail(emailText) {
+        // Extract URLs from email content using regex
+        const urlRegex = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi;
+        const urls = emailText.match(urlRegex) || [];
+        
+        // Remove duplicates and filter out common non-web URLs
+        const uniqueUrls = [...new Set(urls)].filter(url => {
+            // Filter out common email/attachment URLs that aren't web pages
+            const lowerUrl = url.toLowerCase();
+            return !lowerUrl.includes('mailto:') && 
+                   !lowerUrl.includes('tel:') && 
+                   !lowerUrl.includes('attachment') &&
+                   !lowerUrl.includes('cid:') &&
+                   !lowerUrl.includes('data:');
+        });
+        
+        return uniqueUrls;
+    }
+
+    async function checkSingleUrl(url, index) {
+        const previewEl = document.getElementById(`preview-${index}`);
+        if (!previewEl) {
+            return;
+        }
+
+        previewEl.innerHTML = '<div class="loading">Loading preview. Can take up to 30 seconds...</div>';
+
+        try {
+            const response = await fetch(`https://api.microlink.io?url=${encodeURIComponent(url)}&screenshot=true&meta=true&palette=true`);
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                previewEl.innerHTML = `
+                    <div class="preview-content">
+                        <div class="preview-header">
+                            <div class="preview-title-section">
+                                <h4>${data.data.title || 'No title'}</h4>
+                                <div class="preview-controls">
+                                    <button class="expand-btn" onclick="expandPreview(${index})" title="Expand preview">⛶</button>
+                                    <button class="collapse-btn" onclick="togglePreview(${index})" title="Collapse preview">−</button>
+                                </div>
+                            </div>
+                            <p class="preview-description">${data.data.description || 'No description'}</p>
+                        </div>
+                        <div class="preview-body" id="preview-body-${index}">
+                            ${data.data.image ? `
+                                <div class="preview-image">
+                                    <img src="${data.data.image.url}" alt="Preview" style="max-width: 100%; max-height: 200px; border-radius: 4px;">
+                                </div>
+                            ` : ''}
+                            ${data.data.screenshot ? `
+                                <div class="preview-screenshot">
+                                    <img src="${data.data.screenshot.url}" alt="Screenshot" style="max-width: 100%; max-height: 300px; border-radius: 4px; border: 1px solid var(--border);">
+                                </div>
+                            ` : ''}
+                            <div class="preview-meta">
+                                <div class="meta-item">
+                                    <strong>Domain:</strong> ${data.data.url}
+                                </div>
+                                ${data.data.author ? `
+                                    <div class="meta-item">
+                                        <strong>Author:</strong> ${data.data.author}
+                                    </div>
+                                ` : ''}
+                                ${data.data.publisher ? `
+                                    <div class="meta-item">
+                                        <strong>Publisher:</strong> ${data.data.publisher}
+                                    </div>
+                                ` : ''}
+                                ${data.data.logo ? `
+                                    <div class="meta-item">
+                                        <strong>Logo:</strong> <img src="${data.data.logo.url}" alt="Logo" style="height: 20px; vertical-align: middle;">
+                                    </div>
+                                ` : ''}
+                            </div>
+                            <div class="preview-actions">
+                                <a href="${url}" target="_blank" class="visit-btn">Visit Website</a>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                previewEl.innerHTML = `
+                    <div class="preview-error">
+                        <p>Unable to load preview for this URL</p>
+                        <p class="error-detail">${data.message || 'Unknown error'}</p>
+                        <a href="${url}" target="_blank" class="visit-btn">Visit Website</a>
+                    </div>
+                `;
+            }
+        } catch (error) {
+            previewEl.innerHTML = `
+                <div class="preview-error">
+                    <p>Error loading preview</p>
+                    <p class="error-detail">${error.message}</p>
+                    <a href="${url}" target="_blank" class="visit-btn">Visit Website</a>
+                </div>
+            `;
+        }
+    }
+
+    // Make functions globally available
+    window.checkSingleUrl = checkSingleUrl;
+    window.togglePreview = togglePreview;
+    window.expandPreview = expandPreview;
+
+    function togglePreview(index) {
+        const previewBody = document.getElementById(`preview-body-${index}`);
+        const collapseBtn = document.querySelector(`#preview-${index} .collapse-btn`);
+        
+        if (previewBody && collapseBtn) {
+            const isCollapsed = previewBody.style.display === 'none';
+            previewBody.style.display = isCollapsed ? 'block' : 'none';
+            collapseBtn.textContent = isCollapsed ? '−' : '+';
+            collapseBtn.title = isCollapsed ? 'Collapse preview' : 'Expand preview';
+        }
+    }
+
+    function expandPreview(index) {
+        const previewEl = document.getElementById(`preview-${index}`);
+        if (!previewEl) return;
+
+        // Create fullscreen overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'ip-popup-overlay';
+        overlay.style.zIndex = '20000';
+        overlay.innerHTML = `
+            <div class="ip-popup" style="max-width: 95vw; max-height: 95vh; width: 95vw; height: 95vh;">
+                <button class="close-btn" onclick="this.closest('.ip-popup-overlay').remove()">×</button>
+                <h3>Preview: ${previewEl.querySelector('h4')?.textContent || 'Website Preview'}</h3>
+                <div class="expanded-preview">
+                    ${previewEl.querySelector('.preview-body')?.innerHTML || ''}
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.remove();
+            }
+        });
+    }
+
+    // Email preview functions
+    function parseEmailContent(emlText) {
+        // Split headers and body
+        const headerBodySplit = emlText.split(/\r?\n\r?\n/);
+        const headersText = headerBodySplit[0];
+        const bodyText = headerBodySplit.slice(1).join('\n\n');
+        
+        // Parse headers
+        const headers = parseRawHeaders(headersText);
+        
+        // Parse MIME structure
+        const mimeParts = parseMimeStructure(bodyText);
+        
+        return {
+            headers: headers,
+            body: bodyText,
+            mimeParts: mimeParts
+        };
+    }
+
+    function parseMimeStructure(bodyText) {
+        const parts = [];
+        
+        // Check if it's a multipart message
+        const boundaryMatch = bodyText.match(/boundary="?([^"\r\n]+)"?/i);
+        if (!boundaryMatch) {
+            // Single part message
+            parts.push({
+                type: 'text/plain',
+                content: bodyText,
+                encoding: '7bit'
+            });
+            return parts;
+        }
+        
+        const boundary = '--' + boundaryMatch[1];
+        const sections = bodyText.split(boundary);
+        
+        for (const section of sections) {
+            if (!section.trim() || section === '--') continue;
+            
+            const headerBodySplit = section.split(/\r?\n\r?\n/);
+            const partHeaders = headerBodySplit[0];
+            const partBody = headerBodySplit.slice(1).join('\n\n');
+            
+            const contentType = partHeaders.match(/Content-Type:\s*([^;\r\n]+)/i)?.[1] || 'text/plain';
+            const encoding = partHeaders.match(/Content-Transfer-Encoding:\s*([^;\r\n]+)/i)?.[1] || '7bit';
+            const filename = partHeaders.match(/filename="?([^"\r\n]+)"?/i)?.[1];
+            
+            parts.push({
+                type: contentType,
+                content: partBody,
+                encoding: encoding,
+                filename: filename
+            });
+        }
+        
+        return parts;
+    }
+
+    function decodeContent(content, encoding) {
+        switch (encoding.toLowerCase()) {
+            case 'base64':
+                try {
+                    return atob(content.replace(/\s/g, ''));
+                } catch (e) {
+                    return content;
+                }
+            case 'quoted-printable':
+                return content.replace(/=\r?\n/g, '').replace(/=([0-9A-F]{2})/g, (match, hex) => 
+                    String.fromCharCode(parseInt(hex, 16))
+                );
+            default:
+                return content;
+        }
+    }
+
+    function showEmailPreview(emailData) {
+        const emailContent = parseEmailContent(emailData.text);
+        
+        // Create preview overlay
+        const overlay = document.createElement('div');
+        overlay.className = 'ip-popup-overlay';
+        overlay.innerHTML = `
+            <div class="ip-popup" style="max-width: 90vw; max-height: 90vh; width: 1000px;">
+                <button class="close-btn" onclick="this.closest('.ip-popup-overlay').remove()">×</button>
+                <h3>Email Preview: ${emailData.file.name}</h3>
+                <div class="email-preview">
+                    <div class="email-body">
+                        <div class="body-content">
+                            ${emailContent.mimeParts.map((part, index) => {
+                                if (part.type.startsWith('text/html')) {
+                                    // Filter out full HTML documents, only show email body content
+                                    let htmlContent = decodeContent(part.content, part.encoding);
+                                    
+                                    // If it contains DOCTYPE, try to extract just the body content
+                                    if (htmlContent.includes('<!DOCTYPE') || htmlContent.includes('<!doctype')) {
+                                        // Find the body tag and extract everything between body tags
+                                        const bodyRegex = /<body[^>]*>([\s\S]*?)<\/body>/i;
+                                        const bodyMatch = htmlContent.match(bodyRegex);
+                                        
+                                        if (bodyMatch && bodyMatch[1]) {
+                                            htmlContent = bodyMatch[1];
+                                        } else {
+                                            // If no body tags, try to find the main content table
+                                            const tableRegex = /<table[^>]*class="[^"]*nl-container[^"]*"[^>]*>([\s\S]*?)<\/table>/i;
+                                            const tableMatch = htmlContent.match(tableRegex);
+                                            
+                                            if (tableMatch && tableMatch[1]) {
+                                                htmlContent = tableMatch[1];
+                                            } else {
+                                                // Last resort: find any table that looks like email content
+                                                const anyTableRegex = /<table[^>]*>([\s\S]*?)<\/table>/i;
+                                                const anyTableMatch = htmlContent.match(anyTableRegex);
+                                                
+                                                if (anyTableMatch && anyTableMatch[1]) {
+                                                    htmlContent = anyTableMatch[1];
+                                                } else {
+                                                    htmlContent = '';
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Clean up excessive whitespace and line breaks
+                                    htmlContent = htmlContent.replace(/\n\s*\n\s*\n+/g, '\n\n'); // Replace 3+ newlines with 2
+                                    htmlContent = htmlContent.replace(/\r\n\s*\r\n\s*\r\n+/g, '\r\n\r\n'); // Replace 3+ CRLF with 2
+                                    htmlContent = htmlContent.trim();
+                                    
+                                    return `
+                                        <div class="mime-part">
+                                            <iframe srcdoc="${escapeHtml(htmlContent)}" 
+                                                    style="width: 100%; height: 400px; border: 1px solid var(--border); border-radius: 4px;">
+                                            </iframe>
+                                        </div>
+                                    `;
+                                } else if (part.type.startsWith('text/plain')) {
+                                    let plainContent = decodeContent(part.content, part.encoding);
+                                    // Clean up excessive line breaks in plain text too
+                                    plainContent = plainContent.replace(/\n\s*\n\s*\n+/g, '\n\n'); // Replace 3+ newlines with 2
+                                    plainContent = plainContent.replace(/\r\n\s*\r\n\s*\r\n+/g, '\r\n\r\n'); // Replace 3+ CRLF with 2
+                                    plainContent = plainContent.trim();
+                                    
+                                    return `
+                                        <div class="mime-part">
+                                            <pre style="white-space: pre-wrap; background: var(--card); padding: 12px; border-radius: 4px; border: 1px solid var(--border);">${escapeHtml(plainContent)}</pre>
+                                        </div>
+                                    `;
+                                } else if (part.filename) {
+                                    return `
+                                        <div class="mime-part">
+                                            <h5>Attachment: ${escapeHtml(part.filename)}</h5>
+                                            <p>Type: ${escapeHtml(part.type)}</p>
+                                            <p>Size: ${part.content.length} bytes</p>
+                                        </div>
+                                    `;
+                                }
+                                return '';
+                            }).join('')}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        // Close on overlay click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.remove();
+            }
+        });
+    }
+}
+
+// ==================== EMAIL SECURITY CHECKER ====================
 class EmailSecurityChecker {
     constructor() {
         this.commonSelectors = [
@@ -1025,7 +2150,54 @@ class EmailSecurityChecker {
 
 }
 
-// Initialize the checker when the page loads
+// ==================== TAB SWITCHING ====================
+// Handle tab switching functionality
+function initTabSwitching() {
+    const tabButtons = document.querySelectorAll('.tab-button');
+    const dnsTab = document.getElementById('dns-tab');
+    const headerTab = document.getElementById('header-tab');
+
+    tabButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            const tabName = button.getAttribute('data-tab');
+            
+            // Remove active class from all buttons
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            // Add active class to clicked button
+            button.classList.add('active');
+
+            // Fade out current content
+            dnsTab.style.opacity = '0';
+            headerTab.style.opacity = '0';
+
+            // After fade out, switch tabs with slight delay
+            setTimeout(() => {
+                dnsTab.style.display = 'none';
+                headerTab.style.display = 'none';
+
+                // Show selected tab
+                if (tabName === 'dns') {
+                    dnsTab.style.display = 'flex';
+                } else if (tabName === 'header') {
+                    headerTab.style.display = 'flex';
+                }
+
+                // Fade in new content
+                setTimeout(() => {
+                    if (tabName === 'dns') {
+                        dnsTab.style.opacity = '1';
+                    } else if (tabName === 'header') {
+                        headerTab.style.opacity = '1';
+                    }
+                }, 10);
+            }, 200);
+        });
+    });
+}
+
+// Initialize the checkers when the page loads
 document.addEventListener('DOMContentLoaded', () => {
+    initTabSwitching();
     new EmailSecurityChecker();
+    initHeaderChecker();
 });

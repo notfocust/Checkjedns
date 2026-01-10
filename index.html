@@ -4,22 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="favicon.ico">
-    <title>Checkjedns.nl</title>
+    <title>Email Security Tools</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body class="dark">
     <div class="container">
-        <!-- Header with theme toggle -->
+        <!-- Header with theme toggle and tabs -->
         <header class="header">
-            <a class="header-toggle-btn" href="https://checkjeheader.nl/" target="_blank" rel="noopener noreferrer">📧 Check Header</a>
+            <div class="tabs-container">
+                <button class="tab-button active" data-tab="dns">🔍 DNS Check</button>
+                <button class="tab-button" data-tab="header">📧 Header Check</button>
+            </div>
             <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark/light mode">☀️</button>
         </header>
 
-        <!-- Main content - Google-like layout -->
-        <main class="main-content">
+        <!-- DNS Check Tab -->
+        <main class="main-content dns-content" id="dns-tab">
             <!-- Logo/Title -->
             <div class="logo-section">
-                <h1>- DNS Check - </h1>
+                <h1>- DNS Check -</h1>
                 <p>Check your SPF, DMARC, DKIM and MX records now</p>
             </div>
 
@@ -52,9 +58,47 @@
                     <span>Fast Results</span>
                 </div>
             </div>
-
         </main>
-        
+
+        <!-- Email Header Check Tab -->
+        <main class="main-content header-content" id="header-tab" style="display: none;">
+            <!-- Logo/Title -->
+            <div class="logo-section">
+                <h1> - Header Check - </h1>
+                <p>Analyze SPF, DKIM and DMARC instantly</p>
+            </div>
+
+            <!-- Input method selector -->
+            <div class="input-method-selector">
+                <button class="method-toggle active" id="eml-toggle" data-method="eml" aria-label="Upload EML file">Upload .eml File</button>
+                <button class="method-toggle" data-method="paste" aria-label="Paste headers">Paste Headers</button>
+            </div>
+
+            <!-- Hidden input for drag and drop and file picker -->
+            <input id="file-input" type="file" accept=".eml" hidden>
+
+            <!-- Paste headers section (hidden by default) -->
+            <div class="input-card method-section" id="paste-section" data-method="paste" style="display: none;">
+                <textarea id="header-input" placeholder="Paste full email headers here (From the email source)" class="header-textarea"></textarea>
+            </div>
+
+            <!-- Quick action buttons -->
+            <div class="quick-actions">
+                <div class="action-button">
+                    <div class="action-icon">🔍</div>
+                    <span>Analyze Headers</span>
+                </div>
+                <div class="action-button">
+                    <div class="action-icon">🔗</div>
+                    <span>Check Links</span>
+                </div>
+                <div class="action-button">
+                    <div class="action-icon">⚡</div>
+                    <span>Fast Results</span>
+                </div>
+            </div>
+        </main>
+
         <!-- Copyright -->
         <footer class="copyright">
             <a class="footer-github" href="https://github.com/notfocust/Checkjedns/tree/main" target="_blank" rel="noopener noreferrer" aria-label="View GitHub repositories">
@@ -66,7 +110,7 @@
         </footer>
     </div>
     
-    <!-- Results Modal -->
+    <!-- DNS Results Modal -->
     <div id="resultsModal" class="modal" aria-hidden="true" role="dialog" aria-modal="true">
         <div class="modal-content">
             <button class="modal-close" id="modalClose" aria-label="Close">✕</button>
@@ -85,7 +129,58 @@
             </div>
         </div>
     </div>
-    
+
+    <!-- Header Results Modal -->
+    <div id="results-modal" class="modal" aria-hidden="true" role="dialog" aria-modal="true">
+        <div class="modal-backdrop" data-close="modal"></div>
+        <div class="modal-dialog" role="document" aria-labelledby="modal-title">
+            <div class="modal-header">
+                <h2 id="modal-title">Results</h2>
+                <div class="modal-actions">
+                    <button id="preview-email-btn" class="button secondary" type="button" aria-label="Preview Email" title="Preview Email">📧 Preview Email</button>
+                    <button id="check-links-btn" class="button secondary" type="button" aria-label="Check Links" title="Check Links">🔗 Check Links</button>
+                    <button class="button ghost modal-close" type="button" aria-label="Close" title="Close" data-close="modal">✕</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <section class="results" id="results" hidden>
+                    <div class="summary" id="summary"></div>
+                    <div class="auth-status" id="auth-status" hidden>
+                        <div class="badges" id="auth-badges"></div>
+                        <div class="auth-details" id="auth-details"></div>
+                    </div>
+                    <div class="table-wrap" style="margin-top:12px">
+                        <h3 style="margin:10px 12px" id="header-fields-title">Header fields from:</h3>
+                        <table id="fields-table" aria-label="Header fields">
+                            <thead>
+                                <tr>
+                                    <th>Field</th>
+                                    <th>Value</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div class="table-wrap" style="margin-top:12px">
+                        <h3 style="margin:10px 12px">Per-hop delay</h3>
+                        <table id="hops-table" aria-label="Per-hop delay">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>From</th>
+                                    <th>By</th>
+                                    <th>Time UTC</th>
+                                    <th>Delay</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>
