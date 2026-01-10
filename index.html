@@ -6,24 +6,6 @@
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <title>Domain Security Checker</title>
     <link rel="stylesheet" href="styles.css">
-    <style>
-        /* Small overrides for MX results layout and copy buttons */
-        .mx-records { display:block; width:100%; max-width:760px; box-sizing:border-box; }
-        .mx-records .record-line { display:flex; justify-content:space-between; align-items:center; padding:6px 8px; border-bottom:1px solid rgba(255,255,255,0.04); }
-        .mx-copy-btn { margin-left:12px; padding:4px 8px; border-radius:4px; background:#2b6cb0; color:#fff; border:none; cursor:pointer; }
-        .mx-copy-btn.copied { background:#16a34a; }
-        .whois-btn { margin-left:8px; padding:4px 8px; border-radius:4px; background:#555; color:#fff; border:none; cursor:pointer; }
-        .whois-btn.loading { opacity:0.7 }
-
-        /* WHOIS popout */
-        .whois-popout { position:fixed; z-index:1200; min-width:260px; max-width:460px; background:#fff; color:#111; border-radius:8px; box-shadow:0 8px 30px rgba(2,6,23,0.4); padding:12px; font-size:13px; }
-        .whois-popout h4 { margin:0 0 8px 0; font-size:14px }
-        .whois-popout .whois-row { margin:6px 0; color:#333 }
-        .whois-popout .whois-attr { font-weight:600; margin-right:6px }
-        .whois-popout .attribution { margin-top:8px;font-size:12px;color:#555 }
-        .whois-popout .attribution a { color:#1a73e8 }
-    /* whois-block styling moved to styles.css */
-    </style>
 </head>
 <body class="dark">
     <div class="container">
@@ -93,12 +75,8 @@
                 <div class="modal-controls">
                     <input type="text" id="modalDomain" placeholder="Enter a domain" />
                     <button id="modalCheck" class="btn btn-primary">Check</button>
-                    <button id="modalRetry" class="btn" aria-label="Retry check" title="Retry">
-                        <!-- Refresh/Retry icon -->
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M21 10a1 1 0 0 0-1 1 7 7 0 1 1-2.05-4.95l1.42-1.42A9 9 0 1 0 23 11a1 1 0 0 0-1-1z"></path>
-                            <path d="M12 6v6l4-2"></path>
-                        </svg>
+                    <button id="tipsButton" class="btn tips-btn" aria-label="Toggle email security tips" title="Show email security tips">
+                        💡
                     </button>
                 </div>
             </div>

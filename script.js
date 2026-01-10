@@ -83,6 +83,11 @@ class EmailSecurityChecker {
         // Track highest progress value to avoid regressions on async updates
         this.maxProgress = 0;
 
+        this.lastSpfResult = null;
+        this.lastDmarcResult = null;
+        this.lastMxResult = null;
+        this.lastDomain = null;
+
         this.init();
         this.initTheme(document.getElementById('themeToggle'));
     }
@@ -96,7 +101,8 @@ class EmailSecurityChecker {
         this.modalResults = document.getElementById('modalResults');
         this.modalDomain = document.getElementById('modalDomain');
         this.modalCheck = document.getElementById('modalCheck');
-    this.modalRetry = document.getElementById('modalRetry');
+        this.tipsButton = document.getElementById('tipsButton');
+        this.tipsEnabled = false;
 
         checkButton.addEventListener('click', () => this.checkEmailSecurity());
         domainInput.addEventListener('keypress', (e) => {
@@ -131,30 +137,15 @@ class EmailSecurityChecker {
             });
         }
 
-        if (this.modalRetry) {
-            this.modalRetry.addEventListener('click', async () => {
-                if (this.modalDomain && this.modalDomain.value) {
-                    document.getElementById('domain').value = this.modalDomain.value;
-                }
-                const btn = this.modalRetry;
-                try {
-                    btn.classList.add('retrying');
-                    btn.disabled = true;
-                    await this.checkEmailSecurity();
-                } catch (e) {
-                    // allow errors to surface but ensure animation stops
-                    console.error('Retry check failed:', e);
-                } finally {
-                    btn.classList.remove('retrying');
-                    btn.disabled = false;
-                }
-            });
-        }
-
         domainInput.focus();
         
         // Make instance globally available for inline onclick handlers
         window.emailChecker = this;
+        
+        // Add event listener for tips button
+        if (this.tipsButton) {
+            this.tipsButton.addEventListener('click', () => this.toggleTips());
+        }
         
         // Initialize theme from persisted preference
         // Initialize theme from persisted preference (handled by initTheme)
@@ -255,14 +246,15 @@ class EmailSecurityChecker {
             // Check SPF and DMARC in parallel and render immediately
             this.updateProgress(5, 'Checking SPF and DMARC records...');
             
-            const [spfResult, dmarcResult, mxResult] = await Promise.all([
+            const [spfResult, dmarcResult, mxResult, nsResult] = await Promise.all([
                 this.checkSPFRecord(domain),
                 this.checkDMARCRecord(domain),
-                this.checkMXRecord(domain)
+                this.checkMXRecord(domain),
+                this.checkNSRecord(domain)
             ]);
             
             // Render SPF and DMARC results immediately
-            this.displayInitialResults(domain, spfResult, dmarcResult, mxResult);
+            this.displayInitialResults(domain, spfResult, dmarcResult, mxResult, nsResult);
             
             this.updateProgress(20, 'Checking DKIM selectors...');
             
@@ -293,7 +285,7 @@ class EmailSecurityChecker {
                         <div class="section-description">
                             Loading DKIM records...
                         </div>
-                        <div class="loading" style="display:flex; justify-content: center; margin: 8px 0 16px 0;">
+                        <div class="loading loading-progress">
                             <div class="loading-content">
                             <div class="progress-container">
                                 <div class="progress-bar" id="progressFill"></div>
@@ -310,34 +302,187 @@ class EmailSecurityChecker {
         // Modal is opened in showLoading
     }
 
-    displayInitialResults(domain, spfResult, dmarcResult, mxResult) {
+    generateTips(spfResult, dmarcResult) {
+        const tips = [];
+        
+        if (spfResult.found) {
+            if (spfResult.record.includes('~all')) {
+                tips.push({ type: 'warning', text: "SPF uses ~all (soft fail) - consider using -all (hard fail) for better protection" });
+            } else if (spfResult.record.includes('-all')) {
+                tips.push({ type: 'success', text: "SPF uses -all (hard fail) - good for security!" });
+            }
+        } else {
+            tips.push({ type: 'error', text: "No SPF record found - add one to prevent email spoofing" });
+        }
+        
+        if (dmarcResult.found) {
+            const dmarcRecord = dmarcResult.record.toLowerCase();
+            const pMatch = dmarcRecord.match(/p=([^;]+)/);
+            if (pMatch) {
+                const policy = pMatch[1];
+                if (policy === 'none') {
+                    tips.push({ type: 'warning', text: "DMARC policy is 'none' - consider 'quarantine' or 'reject' for enforcement" });
+                } else if (policy === 'quarantine') {
+                    tips.push({ type: 'success', text: "DMARC policy is 'quarantine' - suspicious emails go to spam" });
+                } else if (policy === 'reject') {
+                    tips.push({ type: 'success', text: "DMARC policy is 'reject' - suspicious emails are blocked" });
+                } else {
+                    tips.push({ type: 'warning', text: "Unknown DMARC policy - use 'quarantine' or 'reject'" });
+                }
+            } else {
+                tips.push({ type: 'warning', text: "DMARC record found but no policy (p=) specified" });
+            }
+        } else {
+            tips.push({ type: 'error', text: "No DMARC record found - add one to protect against spoofing" });
+        }
+        
+        return tips;
+    }
+
+    toggleTips() {
+        this.tipsEnabled = !this.tipsEnabled;
+        if (this.tipsButton) {
+            this.tipsButton.classList.toggle('active', this.tipsEnabled);
+        }
+        if (this.lastDomain && this.lastSpfResult && this.lastDmarcResult) {
+            this.displayInitialResults(this.lastDomain, this.lastSpfResult, this.lastDmarcResult, this.lastMxResult, this.lastNsResult);
+        }
+    }
+
+    formatSPFExpanded(spfRecord) {
+        // Parse and format SPF record for vertical display with colors
+        const parts = spfRecord.split(/\s+/);
+        return parts.map(part => {
+            if (part) {
+                let className = 'spf-param-other';
+                if (part.startsWith('v=')) {
+                    className = 'spf-param-v';
+                } else if (part.startsWith('ip4:') || part.startsWith('ip6:')) {
+                    className = 'spf-param-ip';
+                } else if (part.startsWith('include:')) {
+                    className = 'spf-param-include';
+                } else if (part.startsWith('a') || part.startsWith('mx')) {
+                    className = 'spf-param-mechanism';
+                } else if (part.startsWith('-all')) {
+                    className = 'spf-param-fail';
+                } else if (part.startsWith('~all')) {
+                    className = 'spf-param-softfail';
+                } else if (part.startsWith('ptr:')) {
+                    className = 'spf-param-ptr';
+                }
+                return `<div class="spf-part"><span class="${className}">${this.escapeHtml(part)}</span></div>`;
+            }
+            return '';
+        }).filter(x => x).join('');
+    }
+
+    formatDMARCExpanded(dmarcRecord) {
+        // Parse and format DMARC record for vertical display with colors
+        const parts = dmarcRecord.split(/;\s*/);
+        return parts.map(part => {
+            const trimmedPart = part.trim();
+            if (trimmedPart) {
+                let className = 'dmarc-param-other';
+                if (trimmedPart.startsWith('v=')) {
+                    className = 'dmarc-param-v';
+                } else if (trimmedPart.startsWith('p=')) {
+                    className = 'dmarc-param-p';
+                } else if (trimmedPart.startsWith('sp=')) {
+                    className = 'dmarc-param-sp';
+                } else if (trimmedPart.startsWith('rua=')) {
+                    className = 'dmarc-param-rua';
+                } else if (trimmedPart.startsWith('ruf=')) {
+                    className = 'dmarc-param-ruf';
+                }
+                return `<div class="dmarc-part"><span class="${className}">${this.escapeHtml(trimmedPart)}</span></div>`;
+            }
+            return '';
+        }).filter(x => x).join('');
+    }
+
+    escapeHtml(text) {
+        const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+        return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    formatMXRecords(records) {
+        // Format MX records with color coding for priority levels
+        return records.sort((a, b) => a.priority - b.priority).map(r => {
+            let className = 'mx-priority-low';
+            if (r.priority <= 10) {
+                className = 'mx-priority-high';
+            } else if (r.priority <= 20) {
+                className = 'mx-priority-medium';
+            }
+            return `<div class="mx-part"><span class="${className}">${this.escapeHtml(r.exchange)} (priority <span class="mx-priority-value">${r.priority}</span>)</span></div>`;
+        }).join('');
+    }
+
+    formatNSRecords(records) {
+        // Format nameserver records with color coding
+        return records.map(ns => {
+            return `<div class="ns-part"><span class="ns-param">${this.escapeHtml(ns)}</span></div>`;
+        }).join('');
+    }
+
+    displayInitialResults(domain, spfResult, dmarcResult, mxResult, nsResult) {
+        this.lastDomain = domain;
+        this.lastSpfResult = spfResult;
+        this.lastDmarcResult = dmarcResult;
+        this.lastMxResult = mxResult;
+        this.lastNsResult = nsResult;
         const spfDmarcContainer = document.getElementById('spf-dmarc-container');
+        
+        let tipsHtml = '';
+        if (this.tipsEnabled) {
+            const tips = this.generateTips(spfResult, dmarcResult);
+            if (tips.length > 0) {
+                tipsHtml = `
+                    <div class="tips-section">
+                        <div class="tips-header">
+                            <div class="tips-icon">💡</div>
+                            <div class="tips-title">
+                                <h3>Email Security Tips</h3>
+                                <p>Recommendations to improve your domain's email security</p>
+                            </div>
+                        </div>
+                        <ul>
+                            ${tips.map(tip => `<li class="tip-${tip.type}">${tip.text}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+        }
         
         spfDmarcContainer.innerHTML = `
             <div class="security-overview">
                 <div class="security-item">
-                    <h3>SPF Record</h3>
+                    <div class="security-item-header">
+                        <h3>SPF Record</h3>
+                    </div>
                     <div class="security-status ${spfResult.found ? 'status-found' : 'status-not-found'}">
                         ${spfResult.found ? 'Found' : 'Not found'}
                     </div>
                     ${spfResult.found ? `
-                        <div class="record-details">
-                            <div class="record-line">
-                                <span class="record-text">${spfResult.record}</span>
+                        <div class="record-details spf-record expanded" id="spf-record-details">
+                            <div class="record-line spf-record-line">
+                                <div class="spf-text">${this.formatSPFExpanded(spfResult.record)}</div>
                                 <button class="copy-btn" onclick="window.emailChecker.copyToClipboard('${spfResult.record.replace(/'/g, "\\'")}', this)">Copy</button>
                             </div>
                         </div>
                     ` : ''}
                 </div>
                 <div class="security-item">
-                    <h3>DMARC Record</h3>
+                    <div class="security-item-header">
+                        <h3>DMARC Record</h3>
+                    </div>
                     <div class="security-status ${dmarcResult.found ? 'status-found' : 'status-not-found'}">
                         ${dmarcResult.found ? 'Found' : 'Not found'}
                     </div>
                     ${dmarcResult.found ? `
-                        <div class="record-details">
-                            <div class="record-line">
-                                <span class="record-text">${dmarcResult.record}</span>
+                        <div class="record-details dmarc-record expanded" id="dmarc-record-details">
+                            <div class="record-line dmarc-record-line">
+                                <div class="dmarc-text">${this.formatDMARCExpanded(dmarcResult.record)}</div>
                                 <button class="copy-btn" onclick="window.emailChecker.copyToClipboard('${dmarcResult.record.replace(/'/g, "\\'")}', this)">Copy</button>
                             </div>
                         </div>
@@ -345,25 +490,46 @@ class EmailSecurityChecker {
                 </div>
                 ${mxResult ? `
                 <div class="security-item">
-                    <h3>MX Records</h3>
+                    <div class="security-item-header">
+                        <h3>MX Records</h3>
+                    </div>
                     <div class="security-status ${mxResult.found ? 'status-found' : 'status-not-found'}">
                         ${mxResult.found ? 'Found' : 'Not found'}
                     </div>
                     ${mxResult.found ? `
                             <div class="record-details mx-records">
-                                ${mxResult.records.sort((a,b)=>a.priority-b.priority).map(r => `
-                                    <div class="record-line">
-                                        <span class="record-text">${r.exchange} (priority ${r.priority})</span>
-                                        <div style="display:flex;gap:8px;align-items:center">
-                                            <button class="mx-copy-btn" onclick="window.emailChecker.copyToClipboard('${r.exchange.replace(/'/g, "\\'")}', this)">Copy</button>
-                                        </div>
+                                <div class="record-line mx-record-line">
+                                    <div class="mx-text">
+                                        ${this.formatMXRecords(mxResult.records)}
                                     </div>
-                                `).join('')}
+                                    <button class="copy-btn" onclick="window.emailChecker.copyToClipboard('${mxResult.records.sort((a,b)=>a.priority-b.priority).map(r => r.exchange).join(', ').replace(/'/g, "\\'")}', this)">Copy</button>
+                                </div>
+                            </div>
+                        ` : ''}
+                </div>
+                ` : ''}
+                ${nsResult ? `
+                <div class="security-item">
+                    <div class="security-item-header">
+                        <h3>Nameservers</h3>
+                    </div>
+                    <div class="security-status ${nsResult.found ? 'status-found' : 'status-not-found'}">
+                        ${nsResult.found ? 'Found' : 'Not found'}
+                    </div>
+                    ${nsResult.found ? `
+                            <div class="record-details ns-records">
+                                <div class="record-line ns-record-line">
+                                    <div class="ns-text">
+                                        ${this.formatNSRecords(nsResult.records)}
+                                    </div>
+                                    <button class="copy-btn" onclick="window.emailChecker.copyToClipboard('${nsResult.records.join(', ').replace(/'/g, "\\'")}', this)">Copy</button>
+                                </div>
                             </div>
                         ` : ''}
                 </div>
                 ` : ''}
             </div>
+            ${tipsHtml}
         `;
     }
 
@@ -461,7 +627,7 @@ class EmailSecurityChecker {
     showLoading() {
         if (this.modalResults) {
             this.modalResults.innerHTML = `
-                <div class="loading" style="display:flex; justify-content: center;">
+                <div class="loading loading-center">
                     <div class="loading-content">
                     <div class="progress-container">
                         <div class="progress-bar" id="progressFill"></div>
@@ -618,6 +784,26 @@ class EmailSecurityChecker {
             };
         } catch (error) {
             console.warn('MX check failed:', error);
+            return { found: false, records: [] };
+        }
+    }
+
+    async checkNSRecord(domain) {
+        try {
+            const response = await this.queryDNS(domain, 'NS');
+            const answers = response.Answer || response.Answers || [];
+
+            const records = answers.map(a => {
+                const data = a.data || a.rdata || '';
+                return data.replace(/\.$/, '');
+            }).filter(r => r);
+
+            return {
+                found: records.length > 0,
+                records
+            };
+        } catch (error) {
+            console.warn('NS check failed:', error);
             return { found: false, records: [] };
         }
     }
