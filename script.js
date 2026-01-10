@@ -2157,42 +2157,54 @@ function initTabSwitching() {
     const dnsTab = document.getElementById('dns-tab');
     const headerTab = document.getElementById('header-tab');
 
+    // Function to switch to a tab
+    function switchTab(tabName) {
+        // Remove active class from all buttons
+        tabButtons.forEach(btn => btn.classList.remove('active'));
+        // Add active class to the correct button
+        const activeButton = document.querySelector(`.tab-button[data-tab="${tabName}"]`);
+        if (activeButton) activeButton.classList.add('active');
+
+        // Fade out current content
+        dnsTab.style.opacity = '0';
+        headerTab.style.opacity = '0';
+
+        // After fade out, switch tabs with slight delay
+        setTimeout(() => {
+            dnsTab.style.display = 'none';
+            headerTab.style.display = 'none';
+
+            // Show selected tab
+            if (tabName === 'dns') {
+                dnsTab.style.display = 'flex';
+            } else if (tabName === 'header') {
+                headerTab.style.display = 'flex';
+            }
+
+            // Fade in new content
+            setTimeout(() => {
+                if (tabName === 'dns') {
+                    dnsTab.style.opacity = '1';
+                } else if (tabName === 'header') {
+                    headerTab.style.opacity = '1';
+                }
+            }, 10);
+        }, 200);
+
+        // Save current tab to localStorage
+        localStorage.setItem('activeTab', tabName);
+    }
+
     tabButtons.forEach(button => {
         button.addEventListener('click', () => {
             const tabName = button.getAttribute('data-tab');
-            
-            // Remove active class from all buttons
-            tabButtons.forEach(btn => btn.classList.remove('active'));
-            // Add active class to clicked button
-            button.classList.add('active');
-
-            // Fade out current content
-            dnsTab.style.opacity = '0';
-            headerTab.style.opacity = '0';
-
-            // After fade out, switch tabs with slight delay
-            setTimeout(() => {
-                dnsTab.style.display = 'none';
-                headerTab.style.display = 'none';
-
-                // Show selected tab
-                if (tabName === 'dns') {
-                    dnsTab.style.display = 'flex';
-                } else if (tabName === 'header') {
-                    headerTab.style.display = 'flex';
-                }
-
-                // Fade in new content
-                setTimeout(() => {
-                    if (tabName === 'dns') {
-                        dnsTab.style.opacity = '1';
-                    } else if (tabName === 'header') {
-                        headerTab.style.opacity = '1';
-                    }
-                }, 10);
-            }, 200);
+            switchTab(tabName);
         });
     });
+
+    // Restore tab from localStorage or default to 'dns'
+    const savedTab = localStorage.getItem('activeTab') || 'dns';
+    switchTab(savedTab);
 }
 
 // Initialize the checkers when the page loads
@@ -2200,4 +2212,39 @@ document.addEventListener('DOMContentLoaded', () => {
     initTabSwitching();
     new EmailSecurityChecker();
     initHeaderChecker();
+    
+    // Initialize Learn button and modal
+    initLearnModal();
 });
+
+// Learn Modal Handler
+function initLearnModal() {
+    const learnBtn = document.getElementById('learnBtn');
+    const learnModal = document.getElementById('learnModal');
+    const learnModalClose = document.getElementById('learnModalClose');
+    
+    if (!learnBtn || !learnModal) return;
+    
+    // Open modal when Learn button is clicked
+    learnBtn.addEventListener('click', () => {
+        learnModal.classList.add('open');
+        learnModal.classList.add('show');
+        learnModal.setAttribute('aria-hidden', 'false');
+    });
+    
+    // Close modal when close button is clicked
+    learnModalClose?.addEventListener('click', () => {
+        learnModal.classList.remove('open');
+        learnModal.classList.remove('show');
+        learnModal.setAttribute('aria-hidden', 'true');
+    });
+    
+    // Close modal when clicking outside
+    learnModal.addEventListener('click', (e) => {
+        if (e.target === learnModal) {
+            learnModal.classList.remove('open');
+            learnModal.classList.remove('show');
+            learnModal.setAttribute('aria-hidden', 'true');
+        }
+    });
+}

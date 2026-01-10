@@ -18,7 +18,10 @@
                 <button class="tab-button active" data-tab="dns">🔍 DNS Check</button>
                 <button class="tab-button" data-tab="header">📧 Header Check</button>
             </div>
-            <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark/light mode">☀️</button>
+            <div class="header-actions">
+                <button id="learnBtn" class="learn-button" aria-label="Learn about email security">📚 Learn</button>
+                <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark/light mode">☀️</button>
+            </div>
         </header>
 
         <!-- DNS Check Tab -->
@@ -177,6 +180,58 @@
                         </table>
                     </div>
                 </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- Learn Modal -->
+    <div id="learnModal" class="modal" aria-hidden="true" role="dialog" aria-modal="true">
+        <div class="modal-content learn-modal-content">
+            <button class="modal-close" id="learnModalClose" aria-label="Close">✕</button>
+            <div class="modal-header">
+                <h2>📚 Learn About Email Security</h2>
+            </div>
+            <div class="learn-content">
+                <div class="learn-section">
+                    <h3>🔐 SPF (Sender Policy Framework)</h3>
+                    <p><strong>What is it?</strong> SPF is a DNS record that tells email servers which servers are authorized to send emails on behalf of your domain.</p>
+                    <p><strong>Why it matters:</strong> SPF helps prevent email spoofing and unauthorized use of your domain.</p>
+                    <p><strong>How to use:</strong> Add an SPF record to your DNS settings. A basic SPF record looks like: <code>v=spf1 include:_spf.google.com ~all</code></p>
+                    <p><strong>Example:</strong> When someone receives an email from you@example.com, their email server checks the SPF record for example.com to verify the sender's server is authorized.</p>
+                </div>
+
+                <div class="learn-section">
+                    <h3>🔑 DKIM (DomainKeys Identified Mail)</h3>
+                    <p><strong>What is it?</strong> DKIM uses cryptographic signatures to verify that emails haven't been altered during delivery and that they actually come from your domain.</p>
+                    <p><strong>Why it matters:</strong> DKIM proves the authenticity and integrity of your emails, protecting against tampering and forgery.</p>
+                    <p><strong>How to use:</strong> Your email provider (Gmail, Office 365, etc.) typically generates DKIM keys for you. Add them to your DNS records.</p>
+                    <p><strong>Example:</strong> Each email sent from your domain is signed with a private key. Recipients can verify the signature using the public key in your DNS records.</p>
+                </div>
+
+                <div class="learn-section">
+                    <h3>📋 DMARC (Domain-based Message Authentication, Reporting and Conformance)</h3>
+                    <p><strong>What is it?</strong> DMARC is a policy that combines SPF and DKIM to create a comprehensive authentication strategy and tells servers what to do with failed emails.</p>
+                    <p><strong>Why it matters:</strong> DMARC gives you control over your domain's email reputation and helps prevent phishing attacks using your domain.</p>
+                    <p><strong>How to use:</strong> Create a DMARC policy in DNS. A basic policy: <code>v=DMARC1; p=quarantine; rua=mailto:admin@example.com</code></p>
+                    <p><strong>Policies:</strong></p>
+                    <ul class="policy-list">
+                        <li><strong>p=none:</strong> Monitor only - no action taken on failures</li>
+                        <li><strong>p=quarantine:</strong> Failed emails go to spam folder</li>
+                        <li><strong>p=reject:</strong> Failed emails are rejected completely</li>
+                    </ul>
+                </div>
+
+                <div class="learn-section">
+                    <h3>🎯 Best Practices</h3>
+                    <ul class="practice-list">
+                        <li>Implement all three: SPF, DKIM, and DMARC for maximum protection</li>
+                        <li>Start with DMARC p=none to monitor your email infrastructure</li>
+                        <li>Gradually move to p=quarantine or p=reject as you feel confident</li>
+                        <li>Monitor DMARC reports to identify unauthorized senders</li>
+                        <li>Update records when changing email providers</li>
+                        <li>Use alignment in DMARC - ensure From address domain matches SPF/DKIM domains</li>
+                    </ul>
+                </div>
             </div>
         </div>
     </div>
