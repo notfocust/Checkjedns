@@ -1508,15 +1508,22 @@ class EmailSecurityChecker {
             // Check SPF and DMARC in parallel and render immediately
             this.updateProgress(5, 'Checking SPF and DMARC records...');
             
-            const [spfResult, dmarcResult, mxResult, nsResult] = await Promise.all([
+            const [spfResult, dmarcResult, mxResult, nsResult, aResult, aaaaResult] = await Promise.all([
                 this.checkSPFRecord(domain),
                 this.checkDMARCRecord(domain),
                 this.checkMXRecord(domain),
-                this.checkNSRecord(domain)
+                this.checkNSRecord(domain),
+                this.checkARecord(domain),
+                this.checkAAAARecord(domain)
             ]);
             
             // Render SPF and DMARC results immediately
-            this.displayInitialResults(domain, spfResult, dmarcResult, mxResult, nsResult);
+            this.displayInitialResults(domain, spfResult, dmarcResult, mxResult, nsResult, aResult, aaaaResult);
+            
+            this.updateProgress(20, 'Checking SSL certificate...');
+            
+            // Check SSL certificate after initial results
+            await this.checkSSLCertificateProgressive(domain);
             
             this.updateProgress(20, 'Checking DKIM selectors...');
             
@@ -1560,6 +1567,20 @@ class EmailSecurityChecker {
                     </div>
                 </div>
             </div>
+            <div id="ssl-container">
+                <div id="ssl-accordion" class="ssl-accordion">
+                    <div class="ssl-accordion-header" onclick="this.parentElement.classList.toggle('expanded')">
+                        <div class="section-header"><h3>SSL Certificate</h3></div>
+                        <div class="ssl-toggle-indicator" aria-hidden="true">▸</div>
+                    </div>
+                    <div class="ssl-body">
+                        <div class="section-description">
+                            Checking SSL certificate...
+                        </div>
+                        <div id="ssl-results"></div>
+                    </div>
+                </div>
+            </div>
         `;
         // Modal is opened in showLoading
     }
@@ -1583,7 +1604,7 @@ class EmailSecurityChecker {
             if (pMatch) {
                 const policy = pMatch[1];
                 if (policy === 'none') {
-                    tips.push({ type: 'warning', text: "DMARC policy is 'none' - consider 'quarantine' or 'reject' for enforcement" });
+                    tips.push({ type: 'error', text: "DMARC policy is 'none' - not reject or quarantine, which is not good. Consider 'quarantine' or 'reject' for enforcement" });
                 } else if (policy === 'quarantine') {
                     tips.push({ type: 'success', text: "DMARC policy is 'quarantine' - suspicious emails go to spam" });
                 } else if (policy === 'reject') {
@@ -1598,6 +1619,11 @@ class EmailSecurityChecker {
             tips.push({ type: 'error', text: "No DMARC record found - add one to protect against spoofing" });
         }
         
+        // Check for hard fail
+        if (!spfResult.found || !spfResult.record.includes('-all')) {
+            tips.push({ type: 'error', text: "No hard fail (-all) detected - add -all to your SPF record for maximum security" });
+        }
+        
         return tips;
     }
 
@@ -1607,7 +1633,7 @@ class EmailSecurityChecker {
             this.tipsButton.classList.toggle('active', this.tipsEnabled);
         }
         if (this.lastDomain && this.lastSpfResult && this.lastDmarcResult) {
-            this.displayInitialResults(this.lastDomain, this.lastSpfResult, this.lastDmarcResult, this.lastMxResult, this.lastNsResult);
+            this.displayInitialResults(this.lastDomain, this.lastSpfResult, this.lastDmarcResult, this.lastMxResult, this.lastNsResult, this.lastAResult, this.lastAAAAResult);
         }
     }
 
@@ -1687,12 +1713,168 @@ class EmailSecurityChecker {
         }).join('');
     }
 
-    displayInitialResults(domain, spfResult, dmarcResult, mxResult, nsResult) {
+    formatARecords(records) {
+        // Format A records (IPv4)
+        return records.map(ip => {
+            return `<div class="a-part"><span class="a-param">${this.escapeHtml(ip)}</span></div>`;
+        }).join('');
+    }
+
+    formatAAAARecords(records) {
+        // Format AAAA records (IPv6)
+        return records.map(ip => {
+            return `<div class="aaaa-part"><span class="aaaa-param">${this.escapeHtml(ip)}</span></div>`;
+        }).join('');
+    }
+
+    formatDNSSECStatus(dnssecResult) {
+        if (!dnssecResult) {
+            return '<div class="ssl-status-unknown"><span class="ssl-status-label">Unknown</span></div>';
+        }
+
+        let statusClass = 'ssl-status-unknown';
+        let statusText = '❓ Unable to Check';
+        let details = '';
+
+        if (dnssecResult.status === 'valid') {
+            statusClass = 'ssl-status-valid';
+            statusText = '✅ SSL Certificate Valid';
+            details = `Expires in: <strong>${dnssecResult.daysLeft} days</strong><br>Expiration date: <strong>${dnssecResult.expirationDate}</strong>`;
+        } else if (dnssecResult.status === 'expiring-soon') {
+            statusClass = 'ssl-status-warning';
+            statusText = '⚠️ SSL Certificate Expiring Soon';
+            details = `Expires in: <strong>${dnssecResult.daysLeft} days</strong><br>Expiration date: <strong>${dnssecResult.expirationDate}</strong>`;
+        } else if (dnssecResult.status === 'expired') {
+            statusClass = 'ssl-status-error';
+            statusText = '❌ SSL Certificate Expired';
+            details = `Expired: <strong>${Math.abs(dnssecResult.daysLeft)} days ago</strong><br>Expiration date: <strong>${dnssecResult.expirationDate}</strong>`;
+        } else if (dnssecResult.status === 'not-found') {
+            statusClass = 'ssl-status-warning';
+            statusText = '⚠️ No Certificate Found';
+            details = 'No SSL certificate found for this domain';
+        } else if (dnssecResult.status === 'error') {
+            statusClass = 'ssl-status-error';
+            statusText = '❌ Check Failed';
+            details = dnssecResult.message;
+        }
+
+        return `
+            <div class="ssl-status-container">
+                <div class="ssl-status-box ${statusClass}">
+                    <div class="ssl-status-main">${statusText}</div>
+                    <div class="ssl-status-details">${details}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    async checkSSLCertificate(domain) {
+        try {
+            const response = await fetch(`https://${domain}`, {
+                method: 'HEAD',
+                redirect: 'follow'
+            });
+            
+            // Get the certificate info from the response
+            const certHeader = response.headers.get('x-ssl-certificate');
+            
+            // Use a simple HTTPS check - if we get here, the cert is valid
+            return {
+                valid: true,
+                message: 'SSL certificate is valid',
+                domain: domain
+            };
+        } catch (error) {
+            return {
+                valid: false,
+                message: 'SSL certificate check failed or domain is not accessible',
+                error: error.message
+            };
+        }
+    }
+
+    async checkAndDisplaySSL(domain, button) {
+        button.disabled = true;
+        button.textContent = 'Checking...';
+        
+        try {
+            // Use a backend service to check SSL certificate validity and expiration
+            const response = await fetch(`https://crt.sh/?q=${domain}&output=json`);
+            const certificates = await response.json();
+            
+            if (Array.isArray(certificates) && certificates.length > 0) {
+                // Get the most recent certificate
+                const cert = certificates[0];
+                const notAfter = new Date(cert.not_after);
+                const now = new Date();
+                const daysLeft = Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24));
+                
+                let statusClass = 'ssl-valid';
+                let statusText = '✅ SSL Certificate Valid';
+                let details = `Expires in: <strong>${daysLeft} days</strong><br>Expiration date: <strong>${notAfter.toLocaleDateString()}</strong>`;
+                
+                if (daysLeft <= 0) {
+                    statusClass = 'ssl-expired';
+                    statusText = '❌ SSL Certificate Expired';
+                    details = `Expired: <strong>${Math.abs(daysLeft)} days ago</strong><br>Expired date: <strong>${notAfter.toLocaleDateString()}</strong>`;
+                } else if (daysLeft <= 30) {
+                    statusClass = 'ssl-warning';
+                    statusText = '⚠️ SSL Certificate Expiring Soon';
+                }
+                
+                this.showSSLModal(domain, statusClass, statusText, details);
+            } else {
+                this.showSSLModal(domain, 'ssl-warning', '⚠️ No Certificate Found', 'No SSL certificate found in the certificate transparency logs for this domain.');
+            }
+        } catch (error) {
+            this.showSSLModal(domain, 'ssl-error', '❌ Check Failed', `Error: ${error.message}<br><br>Try visiting <strong>https://${domain}</strong> directly to verify the certificate.`);
+        } finally {
+            button.disabled = false;
+            button.textContent = 'Check SSL';
+        }
+    }
+
+    showSSLModal(domain, statusClass, statusText, details) {
+        // Create modal overlay
+        const modal = document.createElement('div');
+        modal.className = 'ssl-modal-overlay';
+        modal.innerHTML = `
+            <div class="ssl-modal">
+                <div class="ssl-modal-header">
+                    <h3>SSL Certificate Check</h3>
+                    <button class="ssl-modal-close" onclick="this.parentElement.parentElement.remove()">×</button>
+                </div>
+                <div class="ssl-modal-body">
+                    <div class="ssl-status-box ${statusClass}">
+                        <div class="ssl-status-text">${statusText}</div>
+                        <div class="ssl-domain">Domain: <strong>${this.escapeHtml(domain)}</strong></div>
+                    </div>
+                    <div class="ssl-details">
+                        ${details}
+                    </div>
+                </div>
+                <div class="ssl-modal-footer">
+                    <button class="ssl-modal-btn" onclick="this.parentElement.parentElement.remove()">Close</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+    }
+
+    displayInitialResults(domain, spfResult, dmarcResult, mxResult, nsResult, aResult, aaaaResult) {
         this.lastDomain = domain;
         this.lastSpfResult = spfResult;
         this.lastDmarcResult = dmarcResult;
         this.lastMxResult = mxResult;
         this.lastNsResult = nsResult;
+        this.lastAResult = aResult;
+        this.lastAAAAResult = aaaaResult;
         const spfDmarcContainer = document.getElementById('spf-dmarc-container');
         
         let tipsHtml = '';
@@ -1790,6 +1972,46 @@ class EmailSecurityChecker {
                         ` : ''}
                 </div>
                 ` : ''}
+                ${aResult ? `
+                <div class="security-item">
+                    <div class="security-item-header">
+                        <h3>A Records (IPv4)</h3>
+                    </div>
+                    <div class="security-status ${aResult.found ? 'status-found' : 'status-not-found'}">
+                        ${aResult.found ? 'Found' : 'Not found'}
+                    </div>
+                    ${aResult.found ? `
+                            <div class="record-details a-records">
+                                <div class="record-line a-record-line">
+                                    <div class="a-text">
+                                        ${this.formatARecords(aResult.records)}
+                                    </div>
+                                    <button class="copy-btn" onclick="window.emailChecker.copyToClipboard('${aResult.records.join(', ').replace(/'/g, "\\'")}', this)">Copy</button>
+                                </div>
+                            </div>
+                        ` : ''}
+                </div>
+                ` : ''}
+                ${aaaaResult ? `
+                <div class="security-item">
+                    <div class="security-item-header">
+                        <h3>AAAA Records (IPv6)</h3>
+                    </div>
+                    <div class="security-status ${aaaaResult.found ? 'status-found' : 'status-not-found'}">
+                        ${aaaaResult.found ? 'Found' : 'Not found'}
+                    </div>
+                    ${aaaaResult.found ? `
+                            <div class="record-details aaaa-records">
+                                <div class="record-line aaaa-record-line">
+                                    <div class="aaaa-text">
+                                        ${this.formatAAAARecords(aaaaResult.records)}
+                                    </div>
+                                    <button class="copy-btn" onclick="window.emailChecker.copyToClipboard('${aaaaResult.records.join(', ').replace(/'/g, "\\'")}', this)">Copy</button>
+                                </div>
+                            </div>
+                        ` : ''}
+                </div>
+                ` : ''}
             </div>
             ${tipsHtml}
         `;
@@ -1838,6 +2060,63 @@ class EmailSecurityChecker {
         this.hideLoading();
         
         return dkimResults;
+    }
+
+    async checkSSLCertificateProgressive(domain) {
+        const sslResultsContainer = document.getElementById('ssl-results');
+        
+        // Update section description if it exists
+        const sectionDescription = document.querySelector('#ssl-container .section-description');
+        if (sectionDescription) {
+            sectionDescription.textContent = 'Checking SSL certificate...';
+        }
+        
+        try {
+            const sslResult = await this.checkSSLCertificateInfo(domain);
+            
+            if (sslResult.found) {
+                const statusHtml = this.formatDNSSECStatus(sslResult);
+                
+                if (sslResultsContainer) {
+                    sslResultsContainer.innerHTML = statusHtml;
+                }
+                
+                // Update section description with result
+                if (sectionDescription) {
+                    sectionDescription.textContent = `Certificate Status: ${sslResult.message}`;
+                }
+            } else {
+                if (sslResultsContainer) {
+                    sslResultsContainer.innerHTML = `
+                        <div class="ssl-status-box ssl-status-warning">
+                            <div class="ssl-status-main">⚠️ No Certificate Found</div>
+                            <div class="ssl-status-details">${sslResult.message}</div>
+                        </div>
+                    `;
+                }
+                
+                if (sectionDescription) {
+                    sectionDescription.textContent = 'No SSL certificate found';
+                }
+            }
+        } catch (error) {
+            console.warn('SSL check failed:', error);
+            if (sslResultsContainer) {
+                sslResultsContainer.innerHTML = `
+                    <div class="ssl-status-box ssl-status-error">
+                        <div class="ssl-status-main">❌ Check Failed</div>
+                        <div class="ssl-status-details">Could not verify SSL certificate</div>
+                    </div>
+                `;
+            }
+            
+            if (sectionDescription) {
+                sectionDescription.textContent = 'SSL certificate check failed';
+            }
+        }
+        
+        this.updateProgress(100, 'Check completed');
+        this.hideLoading();
     }
 
     addDKIMResultToDOM(result, isMicrosoft = false) {
@@ -2067,6 +2346,96 @@ class EmailSecurityChecker {
         } catch (error) {
             console.warn('NS check failed:', error);
             return { found: false, records: [] };
+        }
+    }
+
+    async checkARecord(domain) {
+        try {
+            const response = await this.queryDNS(domain, 'A');
+            const answers = response.Answer || response.Answers || [];
+
+            const records = answers.map(a => {
+                const data = a.data || a.rdata || '';
+                return data;
+            }).filter(r => r);
+
+            return {
+                found: records.length > 0,
+                records
+            };
+        } catch (error) {
+            console.warn('A record check failed:', error);
+            return { found: false, records: [] };
+        }
+    }
+
+    async checkAAAARecord(domain) {
+        try {
+            const response = await this.queryDNS(domain, 'AAAA');
+            const answers = response.Answer || response.Answers || [];
+
+            const records = answers.map(a => {
+                const data = a.data || a.rdata || '';
+                return data;
+            }).filter(r => r);
+
+            return {
+                found: records.length > 0,
+                records
+            };
+        } catch (error) {
+            console.warn('AAAA record check failed:', error);
+            return { found: false, records: [] };
+        }
+    }
+
+    async checkSSLCertificateInfo(domain) {
+        try {
+            // Use crt.sh to check SSL certificate info
+            const response = await fetch(`https://crt.sh/?q=${encodeURIComponent(domain)}&output=json`);
+            const certificates = await response.json();
+            
+            if (!Array.isArray(certificates) || certificates.length === 0) {
+                return {
+                    found: false,
+                    valid: false,
+                    status: 'not-found',
+                    message: 'No SSL certificate found'
+                };
+            }
+            
+            // Get the most recent certificate
+            const cert = certificates[0];
+            const notAfter = new Date(cert.not_after);
+            const now = new Date();
+            const daysLeft = Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24));
+            
+            let status = 'valid';
+            if (daysLeft <= 0) {
+                status = 'expired';
+            } else if (daysLeft <= 30) {
+                status = 'expiring-soon';
+            }
+            
+            return {
+                found: true,
+                valid: daysLeft > 0,
+                status: status,
+                daysLeft: daysLeft,
+                expirationDate: notAfter.toLocaleDateString(),
+                message: status === 'valid' ? `Valid for ${daysLeft} more days` : 
+                         status === 'expiring-soon' ? `Expires in ${daysLeft} days` :
+                         `Expired ${Math.abs(daysLeft)} days ago`
+            };
+        } catch (error) {
+            console.warn('SSL certificate check failed:', error);
+            return {
+                found: false,
+                valid: false,
+                status: 'error',
+                message: 'Could not verify SSL certificate',
+                error: error.message
+            };
         }
     }
 
