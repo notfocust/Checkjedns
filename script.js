@@ -1220,6 +1220,7 @@ class EmailSecurityChecker {
     init() {
         const checkButton = document.getElementById('checkButton');
         const domainInput = document.getElementById('domain');
+        const recordTypeSelector = document.getElementById('recordTypeSelector');
     const themeToggle = document.getElementById('themeToggle');
         this.modal = document.getElementById('resultsModal');
         this.modalClose = document.getElementById('modalClose');
@@ -1227,6 +1228,7 @@ class EmailSecurityChecker {
         this.modalDomain = document.getElementById('modalDomain');
         this.modalCheck = document.getElementById('modalCheck');
         this.tipsButton = document.getElementById('tipsButton');
+        this.selectedRecordType = 'auto';
         this.tipsEnabled = false;
 
         checkButton.addEventListener('click', () => this.checkEmailSecurity());
@@ -1235,6 +1237,13 @@ class EmailSecurityChecker {
                 this.checkEmailSecurity();
             }
         });
+        
+        // Record type selector event listener
+        if (recordTypeSelector) {
+            recordTypeSelector.addEventListener('change', (e) => {
+                this.selectedRecordType = e.target.value;
+            });
+        }
         
         // Add event listener for the modal close button
         if (this.modalClose) {
@@ -1497,6 +1506,12 @@ class EmailSecurityChecker {
             return;
         }
 
+        // Check if a specific record type is selected
+        if (this.selectedRecordType !== 'auto') {
+            await this.checkSpecificRecord(domain, this.selectedRecordType);
+            return;
+        }
+
         this.showLoading();
         this.resetProgress();
 
@@ -1520,11 +1535,6 @@ class EmailSecurityChecker {
             // Render SPF and DMARC results immediately
             this.displayInitialResults(domain, spfResult, dmarcResult, mxResult, nsResult, aResult, aaaaResult);
             
-            this.updateProgress(20, 'Checking SSL certificate...');
-            
-            // Check SSL certificate after initial results
-            await this.checkSSLCertificateProgressive(domain);
-            
             this.updateProgress(20, 'Checking DKIM selectors...');
             
             // Start DKIM checks and update progressively
@@ -1532,14 +1542,14 @@ class EmailSecurityChecker {
             
         } catch (error) {
             this.hideLoading();
-            this.showError('An error occurred while checking email security records: ' + error.message);
+            this.showError('An error occurred while checking DNS records: ' + error.message);
         }
     }
 
     initializeResultsContainer(domain) {
         if (this.modalResults) this.modalResults.innerHTML = `
             <div class="summary">
-                <h2>Email Security Check for ${domain}</h2>
+                <h2>DNS Check for ${domain}</h2>
                 <div id="spf-dmarc-container">
                     <p>Loading SPF and DMARC records...</p>
                 </div>
@@ -1564,20 +1574,6 @@ class EmailSecurityChecker {
                             </div>
                         </div>
                         <div id="dkim-results"></div>
-                    </div>
-                </div>
-            </div>
-            <div id="ssl-container">
-                <div id="ssl-accordion" class="ssl-accordion">
-                    <div class="ssl-accordion-header" onclick="this.parentElement.classList.toggle('expanded')">
-                        <div class="section-header"><h3>SSL Certificate</h3></div>
-                        <div class="ssl-toggle-indicator" aria-hidden="true">▸</div>
-                    </div>
-                    <div class="ssl-body">
-                        <div class="section-description">
-                            Checking SSL certificate...
-                        </div>
-                        <div id="ssl-results"></div>
                     </div>
                 </div>
             </div>
@@ -1886,8 +1882,8 @@ class EmailSecurityChecker {
                         <div class="tips-header">
                             <div class="tips-icon">💡</div>
                             <div class="tips-title">
-                                <h3>Email Security Tips</h3>
-                                <p>Recommendations to improve your domain's email security</p>
+                                <h3>DNS Tips</h3>
+                                <p>Recommendations to improve your domain's DNS configuration</p>
                             </div>
                         </div>
                         <ul>
@@ -2060,63 +2056,6 @@ class EmailSecurityChecker {
         this.hideLoading();
         
         return dkimResults;
-    }
-
-    async checkSSLCertificateProgressive(domain) {
-        const sslResultsContainer = document.getElementById('ssl-results');
-        
-        // Update section description if it exists
-        const sectionDescription = document.querySelector('#ssl-container .section-description');
-        if (sectionDescription) {
-            sectionDescription.textContent = 'Checking SSL certificate...';
-        }
-        
-        try {
-            const sslResult = await this.checkSSLCertificateInfo(domain);
-            
-            if (sslResult.found) {
-                const statusHtml = this.formatDNSSECStatus(sslResult);
-                
-                if (sslResultsContainer) {
-                    sslResultsContainer.innerHTML = statusHtml;
-                }
-                
-                // Update section description with result
-                if (sectionDescription) {
-                    sectionDescription.textContent = `Certificate Status: ${sslResult.message}`;
-                }
-            } else {
-                if (sslResultsContainer) {
-                    sslResultsContainer.innerHTML = `
-                        <div class="ssl-status-box ssl-status-warning">
-                            <div class="ssl-status-main">⚠️ No Certificate Found</div>
-                            <div class="ssl-status-details">${sslResult.message}</div>
-                        </div>
-                    `;
-                }
-                
-                if (sectionDescription) {
-                    sectionDescription.textContent = 'No SSL certificate found';
-                }
-            }
-        } catch (error) {
-            console.warn('SSL check failed:', error);
-            if (sslResultsContainer) {
-                sslResultsContainer.innerHTML = `
-                    <div class="ssl-status-box ssl-status-error">
-                        <div class="ssl-status-main">❌ Check Failed</div>
-                        <div class="ssl-status-details">Could not verify SSL certificate</div>
-                    </div>
-                `;
-            }
-            
-            if (sectionDescription) {
-                sectionDescription.textContent = 'SSL certificate check failed';
-            }
-        }
-        
-        this.updateProgress(100, 'Check completed');
-        this.hideLoading();
     }
 
     addDKIMResultToDOM(result, isMicrosoft = false) {
@@ -2389,56 +2328,6 @@ class EmailSecurityChecker {
         }
     }
 
-    async checkSSLCertificateInfo(domain) {
-        try {
-            // Use crt.sh to check SSL certificate info
-            const response = await fetch(`https://crt.sh/?q=${encodeURIComponent(domain)}&output=json`);
-            const certificates = await response.json();
-            
-            if (!Array.isArray(certificates) || certificates.length === 0) {
-                return {
-                    found: false,
-                    valid: false,
-                    status: 'not-found',
-                    message: 'No SSL certificate found'
-                };
-            }
-            
-            // Get the most recent certificate
-            const cert = certificates[0];
-            const notAfter = new Date(cert.not_after);
-            const now = new Date();
-            const daysLeft = Math.ceil((notAfter - now) / (1000 * 60 * 60 * 24));
-            
-            let status = 'valid';
-            if (daysLeft <= 0) {
-                status = 'expired';
-            } else if (daysLeft <= 30) {
-                status = 'expiring-soon';
-            }
-            
-            return {
-                found: true,
-                valid: daysLeft > 0,
-                status: status,
-                daysLeft: daysLeft,
-                expirationDate: notAfter.toLocaleDateString(),
-                message: status === 'valid' ? `Valid for ${daysLeft} more days` : 
-                         status === 'expiring-soon' ? `Expires in ${daysLeft} days` :
-                         `Expired ${Math.abs(daysLeft)} days ago`
-            };
-        } catch (error) {
-            console.warn('SSL certificate check failed:', error);
-            return {
-                found: false,
-                valid: false,
-                status: 'error',
-                message: 'Could not verify SSL certificate',
-                error: error.message
-            };
-        }
-    }
-
     async checkDKIMRecord(domain, selector) {
         try {
             const dkimDomain = `${selector}._domainkey.${domain}`;
@@ -2510,6 +2399,50 @@ class EmailSecurityChecker {
         }).catch(err => {
             console.error('Copy failed:', err);
         });
+    }
+
+    async checkSpecificRecord(domain, recordType) {
+        this.showLoading();
+        this.resetProgress();
+
+        try {
+            this.updateProgress(10, `Querying ${recordType} records...`);
+            
+            const response = await this.queryDNS(domain, recordType);
+            const answers = response.Answer || response.Answers || [];
+            
+            // Format results based on record type
+            let resultsHtml = `<div class="manual-record-results"><h3>${domain} - ${recordType} Records</h3>`;
+            
+            if (answers.length === 0) {
+                resultsHtml += `<div class="no-records">No ${recordType} records found for ${domain}</div>`;
+            } else {
+                resultsHtml += '<div class="records-list">';
+                answers.forEach((record, index) => {
+                    const data = record.data || record.rdata || '';
+                    resultsHtml += `
+                        <div class="record-item">
+                            <div class="record-data">${this.escapeHtml(data)}</div>
+                            <button class="copy-btn" onclick="window.emailChecker.copyToClipboard('${data.replace(/'/g, "\\'")}', this)">Copy</button>
+                        </div>
+                    `;
+                });
+                resultsHtml += '</div>';
+            }
+            
+            resultsHtml += '</div>';
+            
+            if (this.modalResults) {
+                this.modalResults.innerHTML = resultsHtml;
+                this.openModal(`${recordType} Records for ${domain}`);
+            }
+            
+            this.updateProgress(100, 'Check completed');
+            this.hideLoading();
+        } catch (error) {
+            this.hideLoading();
+            this.showError(`Failed to query ${recordType} records: ${error.message}`);
+        }
     }
 
 

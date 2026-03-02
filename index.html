@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="favicon.ico">
-    <title>Email Security Tools</title>
+    <title>DNS Checker</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
@@ -37,6 +37,21 @@
                 <div class="search-container">
                     <div class="search-box">
                         <input type="text" id="domain" placeholder="Enter your domain (e.g., checkjedns.nl)" autocomplete="off">
+                        <select id="recordTypeSelector" class="record-type-selector" aria-label="Select DNS record type">
+                            <option value="auto">Auto (All)</option>
+                            <option value="A">A</option>
+                            <option value="AAAA">AAAA</option>
+                            <option value="CNAME">CNAME</option>
+                            <option value="MX">MX</option>
+                            <option value="NS">NS</option>
+                            <option value="TXT">TXT</option>
+                            <option value="CAA">CAA</option>
+                            <option value="DS">DS</option>
+                            <option value="DNSKEY">DNSKEY</option>
+                            <option value="PTR">PTR</option>
+                            <option value="SRV">SRV</option>
+                            <option value="SOA">SOA</option>
+                        </select>
                         <button id="checkButton" class="search-button" aria-label="Check domain">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                                 <path d="M21 21L16.514 16.506L21 21ZM19 10.5C19 15.194 15.194 19 10.5 19C5.806 19 2 15.194 2 10.5C2 5.806 5.806 2 10.5 2C15.194 2 19 5.806 19 10.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -189,7 +204,7 @@
         <div class="modal-content learn-modal-content">
             <button class="modal-close" id="learnModalClose" aria-label="Close">✕</button>
             <div class="modal-header">
-                <h2>📚 Learn About Email Security</h2>
+                <h2>📚 Learn About DNS</h2>
             </div>
             <div class="learn-content">
                 <div class="learn-section">

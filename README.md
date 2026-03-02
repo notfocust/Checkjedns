@@ -1,6 +1,6 @@
-Email Security Checker (DNSCheck)
+DNS Checker
 
-This is a small static site to check SPF, DMARC, DKIM, MX, DNSSEC, CAA, MTA-STS, and TLS-RPT records for a domain using DNS-over-HTTPS (DoH).
+This is a small static site to check SPF, DMARC, DKIM, MX, and DNSSEC records for a domain using DNS-over-HTTPS (DoH).
 
 What it does
 
